@@ -17,7 +17,7 @@
 |------|------|-------------|
 | YOLO 모델 `perception_part_detector/weights/best.pt` | ✅ 배치 완료 (2026-05-30) | [Google Drive: part_detector best.pt](https://drive.google.com/file/d/17BepvzEurXIQbh3F9X3SQDCB8iaqLkWC/view) |
 | YOLO 모델 `monitor_ocr/best.pt` | ✅ 배치 완료 (2026-05-30) | [Google Drive: monitor_ocr best.pt](https://drive.google.com/file/d/14H48riKH3KkKxky2yrCMufPfiGz6gfa0/view) |
-| `wrist_task_grasp_planner_node` 코드 | ❌ main 브랜치 미병합 | `fix/wrist-task-grasp-stability` 브랜치에 존재. 병합 또는 cherry-pick 필요 |
+| `wrist_task_grasp_planner_node` 코드 | ✅ feature 브랜치에서 cherry-pick 완료 (2026-05-30) | `fix/wrist-task-grasp-stability` 브랜치의 5개 파일 (planner_node.py, planner.launch.py, wrist_all.launch.py, setup.py, params.yaml) 반영 |
 | Docker 이미지 `ros2_jazzy_robotis_perception:latest` | ❌ 로컬 미존재, Dockerfile 미포함 | Perception 팀 docker registry / 빌드 스크립트 별도 보유 |
 | `~/robotis_ros2_ws` 워크스페이스 | ❌ root 소유, 비어 있음 | `sudo chown -R $USER:$USER ~/robotis_ros2_ws` 후 perception src 복사 |
 | 호스트 ROS 2 jazzy | ❌ `/opt/ros/` 없음 | 도커 안에서만 실행 가능 (정상) |
