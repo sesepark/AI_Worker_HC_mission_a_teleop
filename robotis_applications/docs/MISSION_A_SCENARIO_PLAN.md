@@ -1,8 +1,18 @@
 # 미션 A 시나리오 코드 계획
-> **최종 업데이트**: 2026-05-30  
+> **최종 업데이트**: 2026-05-30 (Perception 로컬 구동 검증 반영 — monitor_ocr 제외 전 노드 동작 확인)  
 > **목표**: 시험 기간 전 미션 A end-to-end 자율 동작 완료  
 > **배점**: 원격 40점 / 자율 60점  
-> **상태 범례**: ✅ 완료 | 🔄 진행 중 | ⬜ 개발 예정 | ⚠️ 블로커
+> **상태 범례**: ✅ 완료 | 🔄 진행 중 | ⬜ 개발 예정 | ⚠️ 블로커  
+> **연관 문서**: [PERCEPTION_INTERFACE.md](./PERCEPTION_INTERFACE.md) (토픽/노드 인터페이스) · [PERCEPTION_LOCAL_SETUP.md](./PERCEPTION_LOCAL_SETUP.md) (실행 검증·런북)
+
+> **🟢 Perception 구동 현황 (2026-05-30)**: `detector` / `projection` / `wrist_projection` / `wrist_pointcloud` /
+> `wrist_grasp_pcd` / `wrist_task_grasp_planner` 로컬+실로봇 검증 완료. **`monitor_ocr`만 ocr_venv 의존성 블로커**(노드 로직 자체는 정상).
+> mission_a 가 구독할 최종 target 토픽은 **`/perception/wrist/target_one_pose`** (planner 출력)로 확정.
+>
+> **🆕 task_management 패키지 추가 (upstream `demo/senario_A`)**: 트레이 검출(`tray_occupancy_node`) +
+> 잔여 관리(`management_node`) → **`/perception/task_list`**(잔여=OCR목표−트레이관측) 발행.
+> mission_a 가 이를 구독하면 OCR 자체파싱·자체 차감 불필요, **VERIFY 가 트레이 비전으로 자동 검증**됨.
+> (mission_a 코드 반영 완료 — sim 검증 통과. [PERCEPTION_INTERFACE.md](./PERCEPTION_INTERFACE.md) §10~11 참고)
 
 ---
 
@@ -25,8 +35,9 @@
 │   │   └── perception_2d_to_pcd/              # head 카메라 2D→3D (참고용)
 │   ├── manipulation/                          # Manipulation 팀 (chlgkals07/ai-worker-ws 클론)
 │   │   └── ai_worker_manipulation/            # MoveIt client, GPD, grasp_filter
-│   ├── mission/                               # System 팀 미션 코드
-│   │   ├── mission_a.py                       # Mission A State Machine stub (Step 1 생성)
+│   ├── mission/                               # System 팀 미션 (ament_python 패키지 `mission`)
+│   │   ├── package.xml / setup.py             # P0 패키지화 (2026-05-30)
+│   │   ├── mission/{mission_a,task_list,sim_driver}.py  # FSM + 잔여수량 + sim
 │   │   └── README.md
 │   └── docs/                                  # 설계 문서
 │       ├── MISSION_A_SCENARIO_PLAN.md         # (본 문서)
@@ -52,7 +63,7 @@
 INIT → A1_MONITOR       : /active_mission="A" 발행
 A1_MONITOR → A2_SCAN    : /monitor_ocr/result 수신 AND screen_detected=true
 A1_MONITOR → A1_MONITOR : 실패 (재시도) / 10초 후 fallback OK
-A2_SCAN → A3_PICK       : /target_pose 수신
+A2_SCAN → A3_PICK       : /perception/wrist/target_one_pose 수신
 A3_PICK → A3_PLACE      : /attached_object non-empty
 A3_PICK → RECOVERY      : timeout (파지 실패)
 A3_PLACE → VERIFY       : /attached_object=""
@@ -140,8 +151,10 @@ DONE → [*]
 **실행 코드**
 | 코드 | 팀 | 상태 |
 |------|----|------|
-| `monitor_ocr_node.py` | Perception | 🔄 YOLO 전환 중 |
+| `monitor_ocr_node.py` | Perception | ⚠️ ocr_venv 의존성 블로커 (노드 로직 정상) + 실모니터 YOLO 전환 중 |
 | `mission_a.py` (A1_MONITOR 상태) | System | 🔄 stub 생성 (2026-05-30) |
+
+> ⚠️ **monitor_ocr 블로커**: ocr_venv 의존성 누락으로 미실행. 해소법은 [PERCEPTION_LOCAL_SETUP.md](./PERCEPTION_LOCAL_SETUP.md) "함정 ②". 해소 전까지 A1_MONITOR는 **10초 fallback OK 경로**로 진행(점수 10점 확보) 가능.
 
 **요청사항**
 - Perception: `/monitor_ocr/result` → Action 구조 변환 검토
@@ -158,8 +171,9 @@ DONE → [*]
 1. detector_node 구동 확인
 2. /detections 구독 → 노란 상자 ROI 내 부품 검출
 3. task_list 기준 현재 target 부품 class 확인
-4. target class 부품 중 confidence 높은 후보 1개 선정
-5. /target_pose 수신 (wrist_projection_node 경유)
+   (planner가 /monitor_ocr/result를 직접 구독해 task 필터링까지 수행)
+4. target class 부품 중 grasp score 최상 후보 1개 → planner가 선정
+5. /perception/wrist/target_one_pose 수신 (wrist_task_grasp_planner_node 출력)
 6. /detector_debug_image overlay 모니터 표시
 7. → A3_PICK 진입
 ```
@@ -168,7 +182,10 @@ DONE → [*]
 | 토픽 | 내용 |
 |------|------|
 | `/detections` | PartDetectionArray (5종 부품 bbox/class/confidence) |
-| `/target_pose` | 선정된 부품 3D pose (base_link 기준) |
+| **`/perception/wrist/target_one_pose`** | task+grasp score 기준 최종 선정 부품 3D pose (base_link) — planner 출력 |
+
+> ⚠️ 기존 `/target_pose`는 폐기. per-detection 중심점은 `/perception/wrist/target_pose`, 최종 1개는 `/perception/wrist/target_one_pose`.
+> planner가 `/monitor_ocr/result` task list를 직접 구독하므로, mission_a는 target_one_pose 한 토픽만 보면 됨.
 
 **발행 토픽**
 | 토픽 | 내용 |
@@ -182,11 +199,12 @@ DONE → [*]
 **실행 코드**
 | 코드 | 팀 | 상태 |
 |------|----|------|
-| `detector_node.py` | Perception | 🔄 로봇 환경 검증 필요 |
-| `wrist_projection_node.py` | Perception | ✅ 완료 |
-| `wrist_pointcloud_node.py` | Perception | ✅ 완료 |
+| `detector_node.py` | Perception | ✅ 로봇 검증 (2026-05-30) |
+| `wrist_projection_node.py` | Perception | ✅ 로봇 검증 |
+| `wrist_pointcloud_node.py` | Perception | ✅ 로봇 검증 |
+| `wrist_task_grasp_planner_node.py` | Perception | ✅ 로봇 검증 — `/perception/wrist/target_one_pose` 발행 |
 | `point_cloud_transformer_node.py` | Manipulation | ✅ 완료 |
-| `mission_a.py` (A2_SCAN 상태) | System | 🔄 stub 생성 (2026-05-30) |
+| `mission_a.py` (A2_SCAN 상태) | System | 🔄 stub 생성 + 구독 토픽 정정 완료 (2026-05-30) |
 
 **요청사항**
 - Perception: command target 부품 `/detections`에서 별도 표시 필드 추가
@@ -301,7 +319,8 @@ DONE → [*]
 **실행 코드**
 | 코드 | 팀 | 상태 |
 |------|----|------|
-| 트레이 검출 노드 | Perception | 🔄 진행 중 |
+| `tray_occupancy_node` (task_management) | Perception | ✅ 구현 (`demo/senario_A`) — `/perception/tray_contents` |
+| 트레이 base_link place 좌표 발행 | Perception | ⬜ 미구현 (현재 tray_contents 는 2D 카운트만) |
 | `tray_place.py` | Manipulation | ⬜ 개발 예정 |
 | `moveit_client.py` | Manipulation | ✅ 완료 |
 
@@ -328,7 +347,11 @@ DONE → [*]
 **구독 토픽**
 | 토픽 | 내용 |
 |------|------|
-| `/detections_3d` | tray 재스캔 결과 (Phase 3, 추후) |
+| **`/perception/task_list`** | 잔여 수량 (management_node, 트레이 비전 자동 차감). `total==0` → DONE |
+
+> ✅ **구현됨**: mission_a 가 `/perception/task_list` 를 구독해 VERIFY 에서 잔여 감소를 확인.
+> place 전 잔여(baseline) 대비 줄면 적재 검증 성공 → 잔여>0 A2_SCAN / 잔여0 DONE.
+> management_node 미가동 시엔 레거시 자체 차감(성공 가정)으로 폴백.
 
 **분기 로직**
 ```
@@ -346,7 +369,8 @@ DONE → [*]
 | 코드 | 팀 | 상태 |
 |------|----|------|
 | `mission_a.py` (VERIFY 상태) | System | 🔄 stub 생성 (2026-05-30) |
-| 적재 검증 모듈 | Perception + Manipulation | ⬜ Phase 3 (6.1~) |
+| `management_node` (`/perception/task_list`) | Perception | ✅ 구현 (`demo/senario_A`) |
+| `mission_a` VERIFY 트레이 차감 연동 | System | ✅ 반영 (sim 검증) |
 
 ---
 
@@ -364,7 +388,9 @@ DONE → [*]
 | `/perception/wrist/target_pose` | Perception (참고) | `PoseStamped` | per-detection 중심점 (wrist_projection_node). 일반적으로는 above가 우선 | 🔄 |
 | `/perception/wrist/target_pcd/<class>` | Perception → Manipulation | `PointCloud2` | 객체별 정제 PCD (wrist_grasp_pcd_node) | 🔄 GPD 입력 토픽 재합의 필요 |
 | `/perception/wrist/mask_cloud` | Perception → Manipulation | `PointCloud2` | 장면 전체 mask 합본 | 🔄 |
-| `/tray_region` | Perception → tray_place | TBD | 파란 트레이 위치 + 적재 영역 | ⬜ 미합의 |
+| **`/perception/task_list`** | Perception(management_node) → mission_a | `std_msgs/String`(JSON) | 잔여=OCR목표−트레이관측. canonical 부품명(공백). A1/VERIFY 소스 | ✅ 발행 구현 (mission_a 반영) |
+| `/perception/tray_contents` | Perception(tray_occupancy_node) → management_node | `std_msgs/String`(JSON) | 트레이 bbox 내 부품 카운트 | ✅ 발행 구현 |
+| `/tray_region` (A3_PLACE place 좌표) | Perception → tray_place | TBD | 파란 트레이 **base_link 3D 위치/적재영역** — tray_contents 는 2D 카운트만이라 별도 필요 | ⬜ 미합의 |
 | `/attached_object` | CM → mission_a | `std_msgs/String` | 파지 물체명 (""=없음) | ✅ 확정 |
 | `/gpd/grasp_poses` | GPD → grasp_filter | `PoseArray` | grasp pose 후보 | ✅ 확정 |
 | `/attach_cmd` | mission_a → CM | `std_msgs/String` | 수동 attach | ✅ 확정 |
@@ -384,10 +410,12 @@ DONE → [*]
 | 2 | TF tree `camera_right_depth_optical_frame`→`camera_r_link` launch 등록 | Perception | 이번 주 | 🔄 |
 | 3 | Blackboard 키 이름 전 팀 합의 문서화 | System | 이번 주 | ⬜ |
 | 4 | `grasp_filter.py` 완성 | Manipulation | 5.30 | 🔄 |
-| 5 | `/target_pose` base_link 기준 발행 로봇 검증 | Perception | 5.31 | 🔄 |
+| 5 | `/perception/wrist/target_one_pose` base_link 발행 로봇 검증 | Perception | 5.31 | ✅ (2026-05-30) |
 | 6 | `mission_a.py` State Machine 뼈대 생성 | System | 5.31 | ✅ (2026-05-30) |
 | 7 | pick-place dummy 루프 1회 end-to-end 테스트 | Manipulation + System | 6.1 | ⬜ |
 | 8 | `/tray_region` 발행 구현 및 인터페이스 합의 | Perception | 6.1 | ⬜ |
+| 9 | `monitor_ocr` ocr_venv 의존성 해소 + `/monitor_ocr/result` 로봇 발행 검증 | Perception | 5.31 | ⚠️ 블로커 |
+| 10 | `mission_a.py` A1~A3 실로직 1차 구현 (아래 "초안 작성 계획") | System | 6.1 | ⬜ |
 
 ---
 
@@ -399,3 +427,71 @@ DONE → [*]
 | TF tree static transform 등록 | Step 3 3D 변환 | left wrist / ZED head만 임시 운용 | 🔄 |
 | Blackboard 키 이름 전 팀 합의 | `mission_a.py` 작성 시작 불가 | — | ⬜ 미착수 |
 | `bin_pick.py` 개발 완료 | Step 5 | 수동 attach로 Step 6~7만 테스트 | ⬜ |
+
+---
+
+## mission_a.py 초안 작성 계획
+
+> **전략**: 외부 블로커(monitor_ocr venv, Manipulation Action 서버, Hand-Eye Calib)에 막히지 않도록
+> **mission_a 내부 로직을 먼저 완성**하고, 외부 의존부는 stub/fallback/fake-publisher로 분리해 단독 테스트 가능하게 만든다.
+> 현재 [mission_a.py](../mission/mission_a.py)는 상태 전이 골격 + 토픽 입출력만 있는 stub.
+
+### 사전 정비 (P0 — 외부 의존 0) ✅ **완료 (2026-05-30)**
+| # | 작업 | 대상 | 상태 |
+|---|------|------|------|
+| P0-1 | `mission/` ament_python 패키지화 (`package.xml`/`setup.py`/`entry_point`) | `ros2 run mission mission_a` | ✅ |
+| P0-2 | `/perception/wrist/target_one_pose` 구독 정정 | A2_SCAN | ✅ |
+| P0-3 | `task_list` 자료구조 — `{class_name: remaining}` + 빌드/차감/완료 | `mission/task_list.py` | ✅ (단위 테스트 통과) |
+| P0-4 | 한국어 부품명 ↔ class_name 매핑 (5종, 공백 정규화) | `PART_NAME_TO_CLASS` | ✅ |
+| P0-5 | state별 timeout (`STATE_TIMEOUT` + `_timed_out()`) | 전 state | ✅ |
+| P0-6 | `--sim` fake publisher 모드 (`mission/sim_driver.py`) | 테스트 | ✅ |
+
+> **🟢 P0 sim 검증 로그 (2026-05-30, 격리 도메인 99/localhost-only)**: `INIT→A1_MONITOR`(IDLE 주입) →
+> task_list `{flange_nut:1, hex_nut:2}`(총 3) 빌드 → **3회 pick-place 루프**
+> (hex_nut 2→1→0, flange_nut 1→0 클래스별 정확 차감·재진입) → `잔여 0 -> DONE` 도달.
+> 실행: `ros2 run mission mission_a --ros-args -p sim_mode:=true` (mission/README "sim 모드").
+> 추가 구현: A1 폴백(10s 강제 OK), A2 `frame_id==base_link` 검사, consume-once 시맨틱, RECOVERY 재시도(max3).
+
+### Phase 1 — Perception 입력 처리 (perception 라이브로 테스트 가능)
+| # | 작업 | state | 상태 |
+|---|------|-------|------|
+| 1-0 | **`/perception/task_list` 구독 → task_list 소유권 perception 이양** | A1/VERIFY | ✅ 구현 (sim 검증) |
+| 1-1 | `/monitor_ocr/result` JSON → `task_list` 빌드 (management 미가동 시 폴백) | A1_MONITOR | ✅ 폴백 구현 (라이브 검증은 monitor_ocr venv 해소 후) |
+| 1-2 | 10초 fallback OK 경로 (OCR 실패 시 강제 진입, 점수 10점) | A1_MONITOR | ✅ 구현 |
+| 1-3 | `/perception/wrist/target_one_pose` 수신 → `current_target` + frame_id 검사 | A2_SCAN | ✅ 구현 (planner 검증됨, 라이브 대기) |
+| 1-4 | target 없을 때 재스캔/타임아웃 → RECOVERY | A2_SCAN | ✅ 구현 |
+| 1-5 | VERIFY 트레이 차감 검증 (`/perception/task_list` 잔여 감소) | VERIFY | ✅ 구현 (sim 검증) |
+
+> **🟢 Phase 1 진행 기록 (2026-05-31)**: task_management 추가 반영. mission_a 가 `/perception/task_list`
+> 를 구독해 perception-owned 경로로 동작 — sim 에서 A1 task_list 확정 → 3회 루프 각 VERIFY 가
+> 트레이 차감(잔여 3→2→1→0) 검증 → DONE 까지 통과. **남은 라이브 검증**: monitor_ocr venv 해소 후
+> 실제 OCR→management_node→task_list, 그리고 planner 실 target 연동.
+
+### Phase 2 — Manipulation 연동 (Action 서버 준비 후, 그 전엔 수동 fallback)
+| # | 작업 | state | 의존 |
+|---|------|-------|------|
+| 2-1 | `bin_pick` Action 클라이언트 호출 (goal=target pose) | A3_PICK | ⬜ `bin_pick.py` Action화 대기 |
+| 2-2 | Calib 전 우회: `/attach_cmd` 발행 + `/attached_object` 폴링 | A3_PICK | `GRASP_ASSESSMENT_ENABLED=False` |
+| 2-3 | `tray_place` Action 클라이언트 호출 | A3_PLACE | ⬜ `tray_place.py` + `/tray_region` 대기 |
+| 2-4 | Calib 전 우회: `/detach_cmd` 발행 | A3_PLACE | |
+| 2-5 | `/manipulator_state` GRASPING→ATTACHED / RELEASING→IDLE 모니터 | A3_PICK/PLACE | ⬜ CM 토픽명 합의(`/manipulator_state`) |
+
+### Phase 3 — 반복/완료/복구 루프
+| # | 작업 | state | 의존 |
+|---|------|-------|------|
+| 3-1 | VERIFY: 적재 성공 판정 → `task_list[target] -= 1` | VERIFY | tray 재스캔(추후) 전엔 무조건 성공 가정 |
+| 3-2 | 잔여 합계>0 → A2_SCAN, =0 → DONE 분기 | VERIFY | |
+| 3-3 | RECOVERY: 최대 3회 재시도 → 초과 시 MANUAL_WAIT | RECOVERY | `MAX_RECOVERY_RETRY` |
+| 3-4 | `/tray_region` 수신 시 VERIFY 재스캔 로직으로 대체 | VERIFY | ⬜ tray_region_node 대기 |
+
+### 권장 진행 순서 & 마일스톤
+1. **P0 전체 + Phase1(fake)** → `--sim` 으로 INIT→A1→A2→A3→VERIFY→DONE 전이 1회 통과 (외부 의존 0, ~당일)
+2. **Phase1 라이브** → perception 스택 띄우고 실제 `target_one_pose`로 A2_SCAN 통과 (monitor_ocr는 fake 유지)
+3. **Phase2 수동 fallback** → `/attach_cmd`·`/detach_cmd`로 pick/place 자리만 통과 (Calib 전)
+4. **Phase2 Action 연동** → bin_pick/tray_place Action 준비되면 교체
+5. **Phase3 + monitor_ocr 해소 + tray_region** → 진짜 end-to-end
+
+### 합의 선행 필요 (코딩 전 확정)
+- CM 토픽명: `/active_mission`, `/manipulator_state`, `/attached_object` (Manipulation과 ⬜ 미합의)
+- `bin_pick` / `tray_place` Action 인터페이스 (goal/result/feedback 스키마)
+- `/tray_region` 메시지 타입

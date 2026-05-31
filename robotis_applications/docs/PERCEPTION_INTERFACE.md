@@ -1,11 +1,39 @@
 # Perception 팀 코드 인터페이스
-> **최종 업데이트**: 2026-05-30 (Task 1 — Notion·Slack 출처와 대조하여 토픽명·노드 목록 정정)
-> **기준 레포**: `~/AI_Worker_HC/robotis_applications/perception/` (snu-shape/AI_Worker_HC `main`)
+> **최종 업데이트**: 2026-05-30 (upstream `demo/senario_A` 반영 — 신규 `task_management` 패키지: 트레이 검출 + 태스크 리스트 관리, 연결 launch)
+> **기준 레포**: `~/AI_Worker_HC/robotis_applications/perception/` (통합본)
+> **Perception 코드 upstream (진실의 원천)**: [hublemon/Humanoid-Challenge-Perception](https://github.com/hublemon/Humanoid-Challenge-Perception) — **브랜치 `fix/wrist-task-grasp-stability`** (⚠️ `main` 아님)
+>   - upstream은 `src/` 하위에 패키지 배치. 우리 통합본 `robotis_applications/perception/`은 그 `src/`를 그대로 가져온 것.
+>   - **2026-05-30 전수 대조 결과: 64개 파일 모두 blob 해시 일치** (`.pt` 가중치 제외). 핵심 추가분 `wrist_task_grasp_planner_node.py` 포함 완전 동기화됨.
 > **참조 원본**:
 > - Notion: [Perception 4주차](https://www.notion.so/87a7502383c283ed8ad501586ae02aa7)
 >   - 하위: [perception_2d_to_pcd (head)](https://www.notion.so/2f87502383c283089e578106278d0d0c), [perception_2d_to_pcd_wrist](https://www.notion.so/3ef7502383c28274a42b81864b5b5c43), [메시지 양식 확인 wrist 용](https://www.notion.so/4e87502383c28221b91201ce413843f0)
 > - Slack: Perception 팀 채널 도커 컨테이너 진입·노드 실행 가이드
 > **상태 범례**: ✅ 검증 완료 | 🔄 진행 중 | ⬜ 개발 예정 | ⚠️ 이슈
+
+---
+
+## 📣 Perception 팀 공식 완료 현황 (2026-05-30 팀 보고)
+
+퍼셉션 팀이 직접 보고한 완료/진행 상태. 아래 "노드별 상세"(레포 정적 분석 기준 9개)와
+**기능 단위 6개 노드**로 매핑된다.
+
+| # | 기능 (팀 표현) | 완료 상태 | 매핑되는 레포 노드 | 비고 |
+|---|----------------|-----------|--------------------|------|
+| ① | 모니터 OCR 추출 (지령 인식 → 종류별 대상·태스크 리스트 생성) | ✅ 완료 | `monitor_ocr_node` | 실모니터 파싱은 YOLO bbox 전환 진행 중 |
+| ② | 부품 종류 판정 (바운딩 박스) | ✅ 완료 | `detector_node` | YOLO11s-seg 5종. **confidence: wrist 단독 0.75~0.80, head 기준 0.8 이상.** head↔wrist 동일 개체 대응 완료 |
+| ③ | 그래스프 타겟 플래닝 및 3D 좌표 전달 | ✅ 완료 | `projection_node` / `wrist_projection_node` | per-detection base_link 중심 좌표 발행 |
+| ④ | 전체 장면 포인트 클라우드 발행 | ✅ 완료 | `pointcloud_node` / `wrist_pointcloud_node` | base_link 월드 좌표 변환 후 Manipulation 전달 완료, **Slack 검증 확인** |
+| ⑤ | 탑 1 그래스프 캔디데이트 중심 좌표 발행 | ✅ 완료 | `wrist_task_grasp_planner_node` | **최대 5개 후보 → score 랭킹 → top-1 중심 3D 좌표 별도 토픽** (`/perception/wrist/target_one_pose`) |
+| ⑥ | 트레이 인식 및 판정 노드 | ✅ **구현됨 (`demo/senario_A`)** | `task_management` 패키지 (`tray_occupancy_node` + `management_node`) | 파란 트레이 검출 → bbox 내 부품 카운트(`/perception/tray_contents`) → OCR 목표와 대조해 잔여 `/perception/task_list` 발행 |
+
+> **객체별 정제 PCD**(`grasp_pcd_node` / `wrist_grasp_pcd_node`)는 팀 기능 뷰에서 ④(PCD 생성·전달)에 포함.
+> 레포에는 head/wrist 분리 + 정제 PCD 노드가 따로 있어 정적 분석 기준 노드 수가 9개로 더 많다.
+
+**핵심 추가 정보 (이번 보고로 확정)**
+- detector confidence 실측: **wrist 단독 0.75~0.80 / head 0.8 이상** — 미션 임계값 설정 시 wrist는 0.75 근처로 낮게 잡아야 누락 없음.
+- head ↔ wrist **동일 개체 대응(cross-camera)** 완료 → planner `cross camera` score 항(0.03)이 실제 동작.
+- PCD가 이미 **base_link 월드 좌표로 변환되어 Manipulation에 전달·Slack 검증 완료** → GPD 입력은 좌표 변환 불필요, 토픽명만 정정하면 됨.
+- ⑥ 트레이 판정 노드 **완성** → `mission_a` `VERIFY`/A1_MONITOR가 **`/perception/task_list`(잔여)** 를 구독하면 OCR 파싱·자체 차감 로직 불필요. 트레이 비전으로 자동 검증됨. (§11 참고)
 
 ---
 
@@ -75,19 +103,25 @@ cp ~/Downloads/monitor_ocr_best.pt   $PERC/monitor_ocr/best.pt
 
 ## 노드 목록
 
-총 9개 (기존 4개 → 5개 추가 발견). 미션 A에서 직접 쓰는 핵심 5개는 ★ 표시.
+레포 정적 분석 기준 9개 (기능 단위로는 6개 — 위 "공식 완료 현황" 참고) + 신규 트레이 노드 1개.
+미션 A에서 직접 쓰는 핵심 5개는 ★ 표시.
 
-| 노드 | 패키지 | 미션 A 역할 | 상태 |
+> **🟢 로컬 구동 검증 (2026-05-30 세션)**: 로컬 컨테이너 + 실로봇 bringup으로 **monitor_ocr 제외 전 노드 정상 작동 확인**.
+> 환경 구축·검증 상세·실행 런북은 [PERCEPTION_LOCAL_SETUP.md](./PERCEPTION_LOCAL_SETUP.md) "실행 검증 현황" + "부록 A 런북" 참고.
+
+| 노드 | 패키지 | 미션 A 역할 | 상태 (로컬 검증) |
 |------|--------|-------------|------|
-| ★ `monitor_ocr_node` | `monitor_ocr` | A.1 지령 모니터 OCR 파싱 | 🔄 YOLO 전환 중 |
-| ★ `detector_node` | `perception_part_detector` | A.2 부품 검출·분류 (head + wrist) | 🔄 학습완료, 로봇 검증 필요 |
-| `projection_node` | `perception_2d_to_pcd` | head 2D→3D center pose | ✅ |
-| `pointcloud_node` | `perception_2d_to_pcd` | head 전체 mask PointCloud2 | ✅ |
-| `grasp_pcd_node` | `perception_2d_to_pcd` | head 객체별 정제 PCD | ✅ |
-| ★ `wrist_projection_node` | `perception_2d_to_pcd_wrist` | wrist 2D→3D center pose (per-detection) | ✅ |
-| ★ `wrist_pointcloud_node` | `perception_2d_to_pcd_wrist` | wrist 전체 mask PointCloud2 | ✅ |
-| ★ `wrist_grasp_pcd_node` | `perception_2d_to_pcd_wrist` | wrist 객체별 정제 PCD (GPD 입력 후보) | ✅ |
-| ★ `wrist_task_grasp_planner_node` | `perception_2d_to_pcd_wrist` | task list 반영 최종 target 1개 선택 | 🔄 stable 로직 추가 중 |
+| ★ `monitor_ocr_node` | `monitor_ocr` | A.1 지령 모니터 OCR 파싱 | ⚠️ **블로커** — 노드 init·구독 정상이나 ocr_venv 의존성 누락 (SETUP 함정 ②). 실모니터 YOLO bbox 전환도 진행 중 |
+| ★ `detector_node` | `perception_part_detector` | A.2 부품 검출·분류 (head + wrist) | ✅ 로봇 검증 (conf: wrist 0.75~0.80 / head 0.8+, cross-camera 대응) |
+| `projection_node` | `perception_2d_to_pcd` | head 2D→3D center pose | ✅ 로봇 검증 |
+| `pointcloud_node` | `perception_2d_to_pcd` | head 전체 mask PointCloud2 | ✅ 로봇 검증 |
+| `grasp_pcd_node` | `perception_2d_to_pcd` | head 객체별 정제 PCD | ✅ 로봇 검증 |
+| ★ `wrist_projection_node` | `perception_2d_to_pcd_wrist` | wrist 2D→3D center pose (per-detection) | ✅ 로봇 검증 |
+| ★ `wrist_pointcloud_node` | `perception_2d_to_pcd_wrist` | wrist 전체 mask PointCloud2 | ✅ 로봇 검증 (Manipulation 전달·Slack 확인) |
+| ★ `wrist_grasp_pcd_node` | `perception_2d_to_pcd_wrist` | wrist 객체별 정제 PCD (GPD 입력 후보) | ✅ 로봇 검증 |
+| ★ `wrist_task_grasp_planner_node` | `perception_2d_to_pcd_wrist` | task list 반영 최종 target 1개 (최대 5후보→top-1) | ✅ 로봇 검증 — `wrist_task_grasp_planner.launch.py params_file:=...` 로 실행 |
+| `tray_occupancy_node` | `task_management` | 파란 트레이 검출 + bbox 내 부품 카운트 → `/perception/tray_contents` | ✅ 구현 (`demo/senario_A`) |
+| `management_node` | `task_management` | OCR 목표 − 트레이 관측 = 잔여 → `/perception/task_list` | ✅ 구현 (`demo/senario_A`) |
 
 **내부 파이프라인**
 ```
@@ -511,6 +545,80 @@ hold_last_pose_sec: 2.0
 
 ---
 
+### 10~11. `task_management` 패키지 — 트레이 검출 + 태스크 리스트 관리 ✅ (`demo/senario_A`)
+
+> **신규 패키지** (upstream `demo/senario_A`, 커밋 `eb595b1f`). 트레이 비전으로 적재 진행을
+> 자동 추적해 **잔여 task list** 를 발행. mission_a 의 OCR 파싱·자체 차감을 대체한다.
+> 두 노드를 잇는 launch: `task_management.launch.py`.
+
+#### 10. `tray_occupancy_node` — 파란 트레이 검출 + 부품 카운트
+
+**실행** (별도 트레이 YOLO 모델 필요, yolo_venv prefix)
+```bash
+ros2 launch task_management task_management.launch.py \
+  tray_model_path:=/ws/src/task_management/weights/tray_best.pt
+```
+
+**Subscribe**
+| 토픽 | 타입 | 설명 |
+|------|------|------|
+| `/detections` | `PartDetectionArray` | 부품 bbox (트레이 내부 판정용) |
+| `/zed/zed_node/rgb/image_rect_color` | `Image` | 트레이 YOLO 입력 |
+
+**Publish**
+| 토픽 | 타입 | 설명 |
+|------|------|------|
+| `/perception/tray_contents` | `std_msgs/String`(JSON) | 트레이 bbox 안에 들어온 부품들의 안정화 카운트 |
+
+**`/perception/tray_contents` JSON**
+```json
+{ "parts": [{"name": "hex nut", "count": 2}],
+  "trays": [{"class_name": "blue_tray", ...}],
+  "stable_frames": 3 }
+```
+- 별도 트레이 YOLO 모델(`tray_model_path`)로 파란 트레이 bbox 검출 → `/detections` 부품 중
+  트레이 bbox 안(+`bbox_margin_px`)에 있는 것만 카운트. `tray_min_hits`/`stable_frames` 로 안정화.
+- ⚠️ `name` 은 **canonical 표기**(공백): `flange nut / gear ring / spacer ring / hex nut / **dom nut**`
+  (detector class_name `flange_nut`/`dome_nut` 와 다름 — `name_utils.canonical_part_name` 가 변환).
+
+#### 11. `management_node` — OCR 목표 − 트레이 관측 = 잔여
+
+**Subscribe**
+| 토픽 | 타입 |
+|------|------|
+| `/monitor_ocr/result` | `String`(JSON) — OCR 목표 수량 |
+| `/perception/tray_contents` | `String`(JSON) — 현재 트레이 내 수량 |
+
+**Publish**
+| 토픽 | 타입 | 설명 |
+|------|------|------|
+| **`/perception/task_list`** | `std_msgs/String`(JSON) | **잔여 = max(OCR목표 − 트레이관측, 0)** |
+
+**`/perception/task_list` JSON**
+```json
+{ "parts": [
+    {"name": "flange nut", "count": 1},
+    {"name": "gear ring",  "count": 0},
+    {"name": "spacer ring","count": 0},
+    {"name": "hex nut",    "count": 2},
+    {"name": "dom nut",    "count": 0} ],
+  "ocr_frames_used": 10,
+  "ocr_latest_screen_detected": true,
+  "tray_stable_frames": 3 }
+```
+- `require_complete_ocr=true` 면 OCR 에 5종이 다 안 잡힌 프레임은 무시(이전 목표 유지) → 안정적.
+- 트레이가 비어도 발행(`publish_on_empty_tray=true`) → 초기 목표 그대로 노출.
+
+**미션 A 영향 (중요)**
+- `mission_a` 는 OCR 파싱·한국어 매핑·자체 차감을 **할 필요 없음**. `/perception/task_list` 한 토픽으로:
+  - A1_MONITOR: 첫 `/perception/task_list` 수신 → 목표 확정
+  - VERIFY: 최신 `/perception/task_list` 의 `total==0` 이면 DONE, 아니면 A2_SCAN 복귀 (트레이 비전이 차감 검증)
+- 단 canonical `name`(공백 표기) ↔ detector class_name 변환 테이블 필요 (`mission/task_list.py` 에 추가).
+- place pose(A3_PLACE)용 트레이 3D 위치/적재영역은 아직 `/perception/tray_contents` 에 2D 정보뿐 —
+  base_link 기준 place 좌표는 별도 협의 필요(트레이 PCD/centroid).
+
+---
+
 ## 전체 토픽 흐름
 
 ```
@@ -727,8 +835,11 @@ translation ≈ [-9.7e-06, 1.0e-05, 1.0e-05]   # 거의 0
 
 | 항목 | 담당 | 기한 | 상태 |
 |------|------|------|------|
-| `mission_a.py` 구독 토픽 정정 (`/target_pose` → `/perception/wrist/target_one_pose`) | System | 5.31 | ⬜ |
+| `mission_a.py` 구독 토픽 정정 (`/target_pose` → `/perception/wrist/target_one_pose`) | System | 5.31 | ✅ (2026-05-30 적용) |
 | Manipulation GPD 입력 토픽 정정 (`/camera_right/points_base` → `/perception/wrist/mask_cloud` 또는 `/perception/wrist/target_pcd/<class>`) | Manipulation | 5.31 | ⬜ |
+| `task_management` 발행 `/perception/task_list` mission_a 연동 (VERIFY/A1) | System | 6.1 | 🔄 (코드 반영 중) |
+| 트레이 base_link place 좌표(A3_PLACE용) 인터페이스 협의 — 현재 `/perception/tray_contents` 는 2D 카운트만 | Perception+Manipulation | 6.1 | ⬜ |
+| 트레이 YOLO 모델 `tray_best.pt` 배치 (launch `tray_model_path`) | Perception | 6.1 | ⬜ |
 | TF tree `camera_right_color_optical_frame → base_link` 확인 / launch 등록 | Perception | 이번 주 | 🔄 |
 | `monitor_ocr_node` YOLO 전환 + 실모니터 검증 | Perception | 이번 주 | 🔄 |
 | wrist cam 기준 추가 학습 반영 후 `detector_node` 재검증 | Perception | 이번 주 | ⬜ |

@@ -1,0 +1,14 @@
+# colcon / ament 빌드 산출물 (재생성 가능)
+build/
+install/
+log/
+
+# python 캐시
+__pycache__/
+*.py[cod]
+
+# venv
+*venv*/
+
+# 모델 가중치 (별도 관리 — Drive/Release/LFS)
+*.pt
