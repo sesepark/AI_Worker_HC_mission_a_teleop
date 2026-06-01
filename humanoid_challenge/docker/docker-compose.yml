@@ -1,0 +1,33 @@
+services:
+  humanoid_challenge:
+    container_name: humanoid_challenge
+    image: ${HUMANOID_CHALLENGE_IMAGE:-humanoid_challenge:jazzy}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.amd64
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    network_mode: host
+    shm_size: "1gb"
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30}
+      - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
+      - ROS_AUTOMATIC_DISCOVERY_RANGE=${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ../:/ws/src/humanoid_challenge
+      - ./workspace:/workspace
+      - humanoid_challenge_build:/ws/build
+      - humanoid_challenge_install:/ws/install
+      - humanoid_challenge_log:/ws/log
+    command: bash -lc "sleep infinity"
+
+volumes:
+  humanoid_challenge_build:
+  humanoid_challenge_install:
+  humanoid_challenge_log:

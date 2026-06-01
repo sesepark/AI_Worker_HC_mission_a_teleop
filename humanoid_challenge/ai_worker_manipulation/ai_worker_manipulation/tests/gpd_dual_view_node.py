@@ -144,7 +144,7 @@ class GpdDualViewNode(Node):
     def __init__(self):
         super().__init__('gpd_dual_view')
 
-        self.declare_parameter('gpd_dir',      '/root/ros2_ws/src/ai_worker/gpd')
+        self.declare_parameter('gpd_dir',      os.environ.get('GPD_DIR', '/opt/gpd'))
         self.declare_parameter('gpd_config',   'cfg/eigen_params.cfg')
         self.declare_parameter('left_topic',   '/camera_left/points_base')
         self.declare_parameter('right_topic',  '/camera_right/points_base')
@@ -223,7 +223,8 @@ class GpdDualViewNode(Node):
                  view_point: np.ndarray) -> list[dict]:
         gpd_dir    = self.get_parameter('gpd_dir').value
         config_rel = self.get_parameter('gpd_config').value
-        config_abs = os.path.join(gpd_dir, config_rel)
+        config_abs = config_rel if os.path.isabs(config_rel) else os.path.join(gpd_dir, config_rel)
+        build_dir  = os.path.join(gpd_dir, 'build')
         voxel_size = self.get_parameter('voxel_size').value
         timeout    = self.get_parameter('gpd_timeout').value
 
@@ -232,6 +233,10 @@ class GpdDualViewNode(Node):
 
         if len(pcd.points) == 0:
             self.get_logger().warn('Merged PCD is empty.')
+            return []
+
+        if not os.path.exists(config_abs):
+            self.get_logger().error(f'GPD config not found: {config_abs}')
             return []
 
         tmp_pcd = tempfile.NamedTemporaryFile(suffix='.pcd', delete=False, prefix='gpd_in_')
@@ -243,8 +248,8 @@ class GpdDualViewNode(Node):
             tmp_cfg = make_temp_config(config_abs, view_point)
 
             result = subprocess.run(
-                ['./build/detect_grasps', tmp_cfg, tmp_pcd.name],
-                cwd=gpd_dir,
+                ['./detect_grasps', tmp_cfg, tmp_pcd.name],
+                cwd=build_dir,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -263,7 +268,7 @@ class GpdDualViewNode(Node):
             return []
         except FileNotFoundError:
             self.get_logger().error(
-                f"GPD binary not found: {gpd_dir}/build/detect_grasps")
+                f"GPD binary not found: {build_dir}/detect_grasps")
             return []
         finally:
             os.unlink(tmp_pcd.name)

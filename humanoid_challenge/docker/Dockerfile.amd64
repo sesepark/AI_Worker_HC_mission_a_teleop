@@ -1,0 +1,161 @@
+FROM ros:jazzy-ros-base
+
+ARG ROS_DISTRO=jazzy
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PADDLEPADDLE_VERSION=3.0.0
+ARG UBUNTU_ARCHIVE_MIRROR=https://archive.ubuntu.com/ubuntu
+ARG UBUNTU_SECURITY_MIRROR=https://security.ubuntu.com/ubuntu
+
+ENV COLCON_WS=/ws
+ENV ROS_DOMAIN_ID=30
+ENV ROS_LOCALHOST_ONLY=0
+ENV ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+SHELL ["/bin/bash", "-c"]
+
+# ROS build/runtime dependencies used by the humanoid_challenge packages:
+# - ament/colcon/rosidl for package and custom message builds
+# - cv_bridge, message_filters, tf2, MoveIt messages, and pymoveit2 for runtime
+# - PCL/Eigen/OpenCV C++ development headers for locally built GPD
+# - rqt_image_view/X11 helpers for visual debugging
+RUN printf '%s\n' \
+        'Acquire::Retries "10";' \
+        'Acquire::http::Pipeline-Depth "0";' \
+        'Acquire::https::Pipeline-Depth "0";' \
+        'Acquire::http::No-Cache "true";' \
+        'Acquire::BrokenProxy "true";' \
+        > /etc/apt/apt.conf.d/80-humanoid-retries && \
+    sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_ARCHIVE_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_SECURITY_MIRROR}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources && \
+    apt-get -o Acquire::Retries=5 update && \
+    for attempt in 1 2 3; do \
+      if apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+        bash-completion \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        less \
+        nano \
+        sudo \
+        vim \
+        wget \
+        python3-argcomplete \
+        python3-colcon-common-extensions \
+        python3-dev \
+        python3-pip \
+        python3-rosdep \
+        python3-setuptools \
+        python3-venv \
+        python3-vcstool \
+        python3-numpy \
+        python3-scipy \
+        python3-opencv \
+        libboost-dev \
+        libeigen3-dev \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libopencv-dev \
+        libpcl-dev \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        mesa-utils \
+        ros-${ROS_DISTRO}-ament-cmake \
+        ros-${ROS_DISTRO}-cv-bridge \
+        ros-${ROS_DISTRO}-geometry-msgs \
+        ros-${ROS_DISTRO}-message-filters \
+        ros-${ROS_DISTRO}-moveit-msgs \
+        ros-${ROS_DISTRO}-pymoveit2 \
+        ros-${ROS_DISTRO}-rqt-image-view \
+        ros-${ROS_DISTRO}-rosidl-default-generators \
+        ros-${ROS_DISTRO}-rosidl-default-runtime \
+        ros-${ROS_DISTRO}-sensor-msgs \
+        ros-${ROS_DISTRO}-std-msgs \
+        ros-${ROS_DISTRO}-tf2-geometry-msgs \
+        ros-${ROS_DISTRO}-tf2-ros \
+        ros-${ROS_DISTRO}-tf2-sensor-msgs \
+        ros-${ROS_DISTRO}-trajectory-msgs; then \
+        apt_install_ok=1; \
+        break; \
+      fi; \
+      echo "apt install failed on attempt ${attempt}; retrying..." >&2; \
+      apt-get -o Acquire::Retries=5 update; \
+      sleep 5; \
+    done && \
+    test "${apt_install_ok:-0}" = "1" && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN rosdep init 2>/dev/null || true && \
+    rosdep update
+
+# Keep the ROS-installed Python packages visible while isolating heavier ML deps.
+# Existing launch files expect these exact venv paths.
+RUN mkdir -p ${COLCON_WS}/src && \
+    python3 -m venv --system-site-packages ${COLCON_WS}/yolo_venv && \
+    ${COLCON_WS}/yolo_venv/bin/pip install --upgrade pip "setuptools<80" wheel && \
+    ${COLCON_WS}/yolo_venv/bin/pip install --no-cache-dir \
+        filelock \
+        fsspec \
+        jinja2 \
+        networkx \
+        sympy \
+        typing-extensions && \
+    ${COLCON_WS}/yolo_venv/bin/pip install --no-cache-dir --no-deps \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch \
+        torchvision && \
+    ${COLCON_WS}/yolo_venv/bin/pip install --no-cache-dir \
+        "numpy<2" \
+        opencv-python \
+        ultralytics && \
+    python3 -m venv --system-site-packages ${COLCON_WS}/ocr_venv && \
+    ${COLCON_WS}/ocr_venv/bin/pip install --upgrade pip "setuptools<80" wheel && \
+    ${COLCON_WS}/ocr_venv/bin/pip install --no-cache-dir \
+        filelock \
+        fsspec \
+        jinja2 \
+        networkx \
+        sympy \
+        typing-extensions && \
+    ${COLCON_WS}/ocr_venv/bin/pip install --no-cache-dir --no-deps \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch \
+        torchvision && \
+    ${COLCON_WS}/ocr_venv/bin/pip install --no-cache-dir \
+        "numpy<2" \
+        opencv-python \
+        ultralytics \
+        "paddlepaddle==${PADDLEPADDLE_VERSION}" \
+        paddleocr
+
+RUN touch ${COLCON_WS}/yolo_venv/COLCON_IGNORE ${COLCON_WS}/ocr_venv/COLCON_IGNORE
+
+# Some non-venv nodes use scipy directly from system Python, and the
+# ai_worker_manipulation GPD wrapper imports Open3D directly.
+RUN python3 -m pip config set global.break-system-packages true && \
+    python3 -m pip install --no-cache-dir --ignore-installed "psutil>=7" && \
+    python3 -m pip install --no-cache-dir \
+        "numpy<2" \
+        scipy \
+        "open3d==0.19.0"
+
+ENV GPD_DIR=${COLCON_WS}/src/humanoid_challenge/gpd
+
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc && \
+    echo "[ -f ${COLCON_WS}/install/setup.bash ] && source ${COLCON_WS}/install/setup.bash" >> /root/.bashrc && \
+    echo "export ROS_DOMAIN_ID=${ROS_DOMAIN_ID}" >> /root/.bashrc && \
+    echo "export ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY}" >> /root/.bashrc && \
+    echo "export ROS_AUTOMATIC_DISCOVERY_RANGE=${ROS_AUTOMATIC_DISCOVERY_RANGE}" >> /root/.bashrc && \
+    echo "export GPD_DIR=${GPD_DIR}" >> /root/.bashrc && \
+    echo "alias cb='cd ${COLCON_WS} && colcon build --symlink-install'" >> /root/.bashrc
+
+WORKDIR ${COLCON_WS}
+
+CMD ["bash"]

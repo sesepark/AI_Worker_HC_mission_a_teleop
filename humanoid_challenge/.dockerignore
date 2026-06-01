@@ -1,0 +1,11 @@
+docker/workspace/
+build/
+install/
+log/
+gpd/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+perception_part_detector/weights/*.pt
+monitor_ocr/*.pt

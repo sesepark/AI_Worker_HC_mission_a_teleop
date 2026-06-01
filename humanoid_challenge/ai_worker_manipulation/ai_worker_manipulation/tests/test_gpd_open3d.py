@@ -131,10 +131,10 @@ def make_dummy_pcd_in_base_link() -> tuple[o3d.geometry.PointCloud, np.ndarray]:
 # ---------------------------------------------------------------------------
 
 def run_gpd(pcd_path: str) -> str:
-    gpd_dir = "/root/ros2_ws/src/ai_worker/gpd"
+    gpd_dir = os.environ.get("GPD_DIR", "/opt/gpd")
     result  = subprocess.run(
-        ["./build/detect_grasps", "cfg/eigen_params.cfg", pcd_path],
-        cwd=gpd_dir,
+        ["./detect_grasps", "../cfg/eigen_params.cfg", pcd_path],
+        cwd=os.path.join(gpd_dir, "build"),
         capture_output=True,
         text=True,
         env={**os.environ, "LIBGL_ALWAYS_SOFTWARE": "1"},
