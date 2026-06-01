@@ -5,7 +5,7 @@
 적재 진행에 따라 잔여 수량을 차감/조회하는 순수 자료구조 (ROS 의존 없음 → 단독 테스트 가능).
 
 Reference:
-- 5종 부품 class: robotis_applications/docs/PERCEPTION_INTERFACE.md "5종 부품 class"
+- 5종 부품 class: humanoid_challenge/docs/PERCEPTION_INTERFACE.md "5종 부품 class"
 - OCR JSON 구조: 같은 문서 monitor_ocr_node "/monitor_ocr/result JSON 구조"
 """
 from __future__ import annotations

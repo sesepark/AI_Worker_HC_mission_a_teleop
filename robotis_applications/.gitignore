@@ -534,6 +534,3 @@ doc/
 
 **/key.pem
 **/cert.pem
-
-# Perception team YOLO model weights (large binaries, distributed separately)
-*.pt

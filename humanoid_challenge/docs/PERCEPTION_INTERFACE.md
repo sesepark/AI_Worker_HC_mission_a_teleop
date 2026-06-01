@@ -1,8 +1,8 @@
 # Perception 팀 코드 인터페이스
 > **최종 업데이트**: 2026-05-30 (upstream `demo/senario_A` 반영 — 신규 `task_management` 패키지: 트레이 검출 + 태스크 리스트 관리, 연결 launch)
-> **기준 레포**: `~/AI_Worker_HC/robotis_applications/perception/` (통합본)
+> **기준 레포**: `~/AI_Worker_HC/humanoid_challenge/` (통합본)
 > **Perception 코드 upstream (진실의 원천)**: [hublemon/Humanoid-Challenge-Perception](https://github.com/hublemon/Humanoid-Challenge-Perception) — **브랜치 `fix/wrist-task-grasp-stability`** (⚠️ `main` 아님)
->   - upstream은 `src/` 하위에 패키지 배치. 우리 통합본 `robotis_applications/perception/`은 그 `src/`를 그대로 가져온 것.
+>   - upstream은 `src/` 하위에 패키지 배치. 우리 통합본은 Perception 패키지들을 `humanoid_challenge/` 아래에 배치한 것.
 >   - **2026-05-30 전수 대조 결과: 64개 파일 모두 blob 해시 일치** (`.pt` 가중치 제외). 핵심 추가분 `wrist_task_grasp_planner_node.py` 포함 완전 동기화됨.
 > **참조 원본**:
 > - Notion: [Perception 4주차](https://www.notion.so/87a7502383c283ed8ad501586ae02aa7)
@@ -39,7 +39,7 @@
 
 ## ⚠️ 실행 전 준비 사항 (Task 2 정적 검증으로 발견)
 
-`~/AI_Worker_HC/robotis_applications/perception/` 의 코드만으로는 실행 불가. 추가로 필요한 자산:
+`~/AI_Worker_HC/humanoid_challenge/` 의 Perception 패키지만으로는 실행 불가. 추가로 필요한 자산:
 
 | 항목 | 상태 | 출처 / 우회 |
 |------|------|-------------|
@@ -64,7 +64,7 @@
 #      https://drive.google.com/file/d/14H48riKH3KkKxky2yrCMufPfiGz6gfa0/view
 
 # 2. 정위치로 복사 (파일명 best.pt로 통일)
-PERC=~/AI_Worker_HC/robotis_applications/perception
+PERC=~/AI_Worker_HC/humanoid_challenge
 mkdir -p $PERC/perception_part_detector/weights
 cp ~/Downloads/part_detector_best.pt $PERC/perception_part_detector/weights/best.pt
 cp ~/Downloads/monitor_ocr_best.pt   $PERC/monitor_ocr/best.pt
@@ -72,10 +72,10 @@ cp ~/Downloads/monitor_ocr_best.pt   $PERC/monitor_ocr/best.pt
 
 **확인**: ament_python share 디렉토리 구조 (setup.py 기준)
 - `detector_node` 기본 경로: `<pkg_share>/perception_part_detector/weights/best.pt`
-  - 소스 트리: `perception/perception_part_detector/weights/best.pt`
+  - 소스 트리: `humanoid_challenge/perception_part_detector/weights/best.pt`
   - 오버라이드: `--ros-args -p model_path:=/path/to/best.pt`
 - `monitor_ocr_node` 기본 경로: `<pkg_share>/monitor_ocr/best.pt`
-  - 소스 트리: `perception/monitor_ocr/best.pt`
+  - 소스 트리: `humanoid_challenge/monitor_ocr/best.pt`
   - 오버라이드: `--ros-args -p yolo_model_path:=/path/to/best.pt`
 
 **정적 검증 결과** (2026-05-30):
@@ -854,7 +854,7 @@ translation ≈ [-9.7e-06, 1.0e-05, 1.0e-05]   # 거의 0
 
 ```bash
 # 패키지 위치
-find ~/AI_Worker_HC/robotis_applications/perception -name "package.xml" 2>/dev/null
+find ~/AI_Worker_HC/humanoid_challenge -maxdepth 2 -name "package.xml" 2>/dev/null
 
 # 토픽 발행 확인 (로봇 연결 시)
 ros2 topic echo --once /monitor_ocr/result

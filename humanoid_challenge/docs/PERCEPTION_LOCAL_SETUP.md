@@ -108,7 +108,11 @@ sudo docker tag  <registry>/ros2_jazzy_robotis_perception:latest \
 ```bash
 # stale src 를 AI_Worker_HC 통합본으로 재동기화 (planner + .pt 포함)
 rsync -a --delete \
-  ~/AI_Worker_HC/robotis_applications/perception/ \
+  ~/AI_Worker_HC/humanoid_challenge/monitor_ocr \
+  ~/AI_Worker_HC/humanoid_challenge/perception_2d_to_pcd \
+  ~/AI_Worker_HC/humanoid_challenge/perception_2d_to_pcd_wrist \
+  ~/AI_Worker_HC/humanoid_challenge/perception_part_detector \
+  ~/AI_Worker_HC/humanoid_challenge/task_management \
   ~/robotis_ros2_ws/src/
 rm -f ~/robotis_ros2_ws/save_image.py
 
@@ -132,12 +136,18 @@ rm -f ~/robotis_ros2_ws/save_image.py
 
 # 3. perception src 복사 (AI_Worker_HC 통합본 사용 권장 — planner + .pt 포함)
 mkdir -p ~/robotis_ros2_ws/src
-cp -r ~/AI_Worker_HC/robotis_applications/perception/* ~/robotis_ros2_ws/src/
+cp -r \
+  ~/AI_Worker_HC/humanoid_challenge/monitor_ocr \
+  ~/AI_Worker_HC/humanoid_challenge/perception_2d_to_pcd \
+  ~/AI_Worker_HC/humanoid_challenge/perception_2d_to_pcd_wrist \
+  ~/AI_Worker_HC/humanoid_challenge/perception_part_detector \
+  ~/AI_Worker_HC/humanoid_challenge/task_management \
+  ~/robotis_ros2_ws/src/
 
 # 4. 확인
 ls ~/robotis_ros2_ws/src/
 # 기대 결과:
-#   monitor_ocr  perception_2d_to_pcd  perception_2d_to_pcd_wrist  perception_part_detector
+#   monitor_ocr  perception_2d_to_pcd  perception_2d_to_pcd_wrist  perception_part_detector  task_management
 
 # 5. .pt 파일 동기화 확인 (.gitignore라 cp -r에 따라옴)
 ls ~/robotis_ros2_ws/src/perception_part_detector/weights/best.pt

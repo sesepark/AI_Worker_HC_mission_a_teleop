@@ -6,7 +6,7 @@ P0 구현: 패키지화 + task_list 로직 + state timeout + --sim 모드.
 Perception 입력(`/perception/wrist/target_one_pose`, `/monitor_ocr/result`,
 `/detections`)은 검증됨. Manipulation 연동(A3_PICK/PLACE Action)은 Phase 2 TODO.
 
-Reference: robotis_applications/docs/MISSION_A_SCENARIO_PLAN.md "mission_a.py 초안 작성 계획"
+Reference: humanoid_challenge/docs/MISSION_A_SCENARIO_PLAN.md "mission_a.py 초안 작성 계획"
 """
 from __future__ import annotations
 

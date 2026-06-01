@@ -5,8 +5,8 @@ Quest의 WebXR 화면에서 컨트롤러/핸드 트래킹 입력을 받아 ROS 2
 `robotis_vuer` 패키지를 다룹니다.
 
 > 이 문서는 현재 브랜치의 실제 코드
-> ([robotis_vuer/launch/vr.launch.py](../robotis_vuer/launch/vr.launch.py),
-> [robotis_vuer/robotis_vuer/vr_publisher_sg2.py](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py))
+> ([robotis_vuer/launch/vr.launch.py](../../robotis_applications/robotis_vuer/launch/vr.launch.py),
+> [robotis_vuer/robotis_vuer/vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py))
 > 를 기준으로 작성되었습니다. 다른 브랜치(`feature/vr-head-tracking-leader-sg2` 등)에서는
 > launch 인자나 토픽이 다를 수 있으니 해당 브랜치의 코드를 직접 확인하세요.
 
@@ -177,7 +177,7 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 
 `vr_publisher_sg2` 노드는 Vuer를 HTTPS로 띄우기 위해 패키지 디렉터리의
 `cert.pem` / `key.pem`을 사용합니다
-([vr_publisher_sg2.py:101-115](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L101-L115)).
+([vr_publisher_sg2.py:101-115](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L101-L115)).
 
 - **자동 생성**: 인증서 파일이 없으면 노드가 시작 시 자기서명 인증서를 자동으로 생성합니다.
   생성 시 다음 경고가 한 번 출력됩니다:
@@ -194,7 +194,7 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 ## 4. 발행/구독 토픽
 
 `vr_publisher_sg2` 노드 기준
-([vr_publisher_sg2.py:184-248](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L184-L248)).
+([vr_publisher_sg2.py:184-248](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L184-L248)).
 
 ### 4.1 발행 (Publishers)
 
@@ -225,7 +225,7 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 
 ## 5. 조작 매핑
 
-[vr_publisher_sg2.py](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py) 기준.
+[vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py) 기준.
 
 | 입력 | 동작 |
 |------|------|
@@ -238,14 +238,14 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 | **B 버튼 (양손 동시)** | `/reactivate` = `False` 발행 (rising edge) |
 
 - **모드 구분**: `joystick_mode = True` → `LIFT+HEAD`, `False` → `LIFT+CMD_VEL`
-  ([vr_publisher_sg2.py:407-408](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L407-L408)).
+  ([vr_publisher_sg2.py:407-408](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L407-L408)).
 - 컨트롤러 입력 로그는 `Controller data received | ... mode=LIFT+HEAD/LIFT+CMD_VEL` 형태로 주기 출력됩니다.
 
 ---
 
 ## 6. 주요 파라미터
 
-[vr_publisher_sg2.py:107-142](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L107-L142) 등에서 선언.
+[vr_publisher_sg2.py:107-142](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L107-L142) 등에서 선언.
 
 | 파라미터 | 기본값 | 설명 |
 |----------|--------|------|
@@ -300,7 +300,7 @@ ros2 run robotis_vuer vr_publisher_sg2 --ros-args \
 
 ## 8. 참고
 
-- 패키지 개요: [robotis_vuer/README.md](../robotis_vuer/README.md)
-- 노드 소스: [vr_publisher_sg2.py](../robotis_vuer/robotis_vuer/vr_publisher_sg2.py)
+- 패키지 개요: [robotis_vuer/README.md](../../robotis_applications/robotis_vuer/README.md)
+- 노드 소스: [vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py)
   (동일 패키지에 `vr_publisher_hx5.py`, `vr_publisher_sh5.py`도 있으며 같은 인증서 경로 로직을 사용)
 - Vuer 공식: [docs.vuer.ai](https://docs.vuer.ai) · [github.com/vuer-ai/vuer](https://github.com/vuer-ai/vuer)

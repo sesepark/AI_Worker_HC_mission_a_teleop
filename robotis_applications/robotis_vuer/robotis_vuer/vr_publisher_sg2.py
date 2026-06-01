@@ -20,7 +20,6 @@ import asyncio
 import os
 import socket
 import threading
-import traceback
 
 from geometry_msgs.msg import Point, PoseStamped, Quaternion, Twist
 import nest_asyncio
@@ -51,52 +50,6 @@ VR_HEAD_TO_ROS = np.array([
     [0.0, 0.0, -1.0],  # ROS Y = -head Z
     [-1.0, 0.0, 0.0],  # ROS Z = -head X
 ], dtype=np.float64)
-
-
-def generate_self_signed_cert(cert_path, key_path):
-    """Create a self-signed TLS cert/key pair for the Vuer HTTPS server.
-
-    Quest WebXR only runs in a secure (HTTPS) context, so the Vuer server
-    needs a certificate. When one is missing we generate a long-lived
-    self-signed pair next to this module so the node starts on any machine
-    without a manual setup step.
-    """
-    import datetime
-    import ipaddress
-
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
-    now = datetime.datetime.utcnow()
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(days=1))
-        .not_valid_after(now + datetime.timedelta(days=3650))
-        .add_extension(
-            x509.SubjectAlternativeName([
-                x509.DNSName('localhost'),
-                x509.IPAddress(ipaddress.ip_address('127.0.0.1')),
-            ]),
-            critical=False,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    with open(key_path, 'wb') as f:
-        f.write(key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        ))
-    with open(cert_path, 'wb') as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
 
 
 class VRTrajectoryPublisher(Node):
@@ -148,12 +101,6 @@ class VRTrajectoryPublisher(Node):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         cert_file = os.path.join(current_dir, 'cert.pem')
         key_file = os.path.join(current_dir, 'key.pem')
-        if not os.path.exists(cert_file) or not os.path.exists(key_file):
-            self.get_logger().warn(
-                f'TLS cert/key not found in {current_dir}; '
-                'generating a self-signed pair for the VR HTTPS server'
-            )
-            generate_self_signed_cert(cert_file, key_file)
         hostname = socket.gethostbyname(socket.gethostname())
         ws_url = f'ws://{hostname}:8012'
 
@@ -1203,9 +1150,7 @@ class VRTrajectoryPublisher(Node):
                 # spawn(start=True) internally starts and runs the server loop.
                 self.vuer.spawn(start=True)(self.main_hand_tracking)
             except Exception as e:
-                self.get_logger().error(
-                    f'Error in VR server thread: {e}\n{traceback.format_exc()}'
-                )
+                self.get_logger().error(f'Error in VR server thread: {e}')
 
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
@@ -1457,7 +1402,7 @@ class VRTrajectoryPublisher(Node):
 
     def __del__(self):
         try:
-            if hasattr(self, 'vuer') and hasattr(self.vuer, 'stop'):
+            if hasattr(self, 'vuer'):
                 self.loop.run_until_complete(self.vuer.stop())
             if hasattr(self, 'loop'):
                 self.loop.close()
