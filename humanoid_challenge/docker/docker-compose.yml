@@ -1,10 +1,7 @@
 services:
   humanoid_challenge:
     container_name: humanoid_challenge
-    image: ${HUMANOID_CHALLENGE_IMAGE:-humanoid_challenge:jazzy}
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.amd64
+    image: ${HUMANOID_CHALLENGE_IMAGE:-shpark1104/humanoid_challenge:jazzy}
     tty: true
     stdin_open: true
     restart: unless-stopped

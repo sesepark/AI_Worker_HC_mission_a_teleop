@@ -4,24 +4,26 @@
 mission_a 노드가 **현재 어느 state 인지** 보고 그 state 를 다음으로 넘기는 가짜 메시지를 발행.
 실제 perception / manipulation 스택 없이 INIT→A1→A2→A3→VERIFY→DONE 루프를 돌려본다.
 
-신규 `task_management` 파이프라인을 모사한다:
-- A1 에서 `/perception/task_list`(잔여) 발행 → mission_a 가 perception-owned 경로 사용
-- place 마다 내부 잔여를 1 차감 후 `/perception/task_list` 재발행 (트레이 비전 차감 모사)
+`/mission_a/task_list` 서비스를 모사해 MissionA의 서비스 기반 경로를 검증한다.
 """
 from __future__ import annotations
 
-import json
-
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
+from mission_interfaces.msg import TaskItem
+from mission_interfaces.srv import GetTaskList
 
 
-# 시나리오 초기 목표 (canonical 표기, management_node 와 동일). 총 3개.
+# 시나리오 초기 목표 (canonical 표기). 총 3개.
 SIM_INITIAL = {'flange nut': 1, 'hex nut': 2}
 CANONICAL_PARTS = ['flange nut', 'gear ring', 'spacer ring', 'hex nut', 'dom nut']
 CANON_TO_CLASS = {
     'flange nut': 'flange_nut', 'gear ring': 'gear_ring',
     'spacer ring': 'spacer_ring', 'hex nut': 'hex_nut', 'dom nut': 'dome_nut',
+}
+CANON_TO_KOR = {
+    'flange nut': '플랜지 너트', 'gear ring': '기어 링',
+    'spacer ring': '스페이서 링', 'hex nut': '육각 너트', 'dom nut': '돔 너트',
 }
 
 
@@ -36,14 +38,15 @@ class SimDriver:
         self.pub_target = node.create_publisher(
             PoseStamped, '/perception/wrist/target_one_pose', 10)
         self.pub_attached = node.create_publisher(String, '/attached_object', 10)
-        self.pub_task_list = node.create_publisher(String, '/perception/task_list', 10)
+        self.srv_task_list = node.create_service(
+            GetTaskList, node.task_list_service_name, self._handle_task_list)
 
         self._remaining = dict(SIM_INITIAL)   # 내부 잔여 (canonical)
         self._picked: str | None = None       # 이번 사이클에 집은 canonical 부품
         self._last_action: str | None = None
         self._timer = node.create_timer(period_sec, self._drive)
         node.get_logger().warn(
-            '[SIM] sim_driver 활성 — /perception/task_list 기반 FSM 구동')
+            f'[SIM] sim_driver 활성 — {node.task_list_service_name} 서비스 기반 FSM 구동')
 
     def _once(self, key: str) -> bool:
         if self._last_action == key:
@@ -51,12 +54,17 @@ class SimDriver:
         self._last_action = key
         return True
 
-    def _publish_task_list(self) -> None:
-        parts = [{'name': n, 'count': int(self._remaining.get(n, 0))}
-                 for n in CANONICAL_PARTS]
-        payload = {'parts': parts, 'ocr_latest_screen_detected': True,
-                   'tray_stable_frames': 3}
-        self.pub_task_list.publish(String(data=json.dumps(payload, ensure_ascii=False)))
+    def _handle_task_list(self, request, response):
+        response.success = True
+        response.message = 'sim task list ready'
+        response.screen_detected = True
+        response.all_counts_recognized = True
+        response.frames_used = int(request.frame_count) if request.frame_count else 1
+        response.parts = [
+            TaskItem(name=CANON_TO_KOR[n], count=int(self._remaining.get(n, 0)))
+            for n in CANONICAL_PARTS
+        ]
+        return response
 
     def _drive(self) -> None:
         S = self._State
@@ -69,10 +77,9 @@ class SimDriver:
                 n.get_logger().info('[SIM] /manipulator_state=IDLE 주입')
 
         elif st == S.A1_MONITOR:
-            if not n._perception_owns_tasklist and self._once('a1'):
-                self._publish_task_list()
+            if self._once('a1'):
                 total = sum(self._remaining.values())
-                n.get_logger().info(f'[SIM] /perception/task_list 주입 (총 {total})')
+                n.get_logger().info(f'[SIM] task_list service 대기 중 (총 {total})')
 
         elif st == S.A2_SCAN:
             if n.last_target_pose is None and self._once(f'a2:{n.cycle}'):
@@ -96,10 +103,8 @@ class SimDriver:
         elif st == S.A3_PLACE:
             if n.last_attached_object and self._once(f'place:{n.cycle}'):
                 self.pub_attached.publish(String(data=''))
-                # 트레이 비전 차감 모사: 잔여 1 감소 후 task_list 재발행
                 if self._picked and self._remaining.get(self._picked, 0) > 0:
                     self._remaining[self._picked] -= 1
-                self._publish_task_list()
                 total = sum(self._remaining.values())
                 n.get_logger().info(
-                    f'[SIM] /attached_object="" + task_list 재발행 (잔여 {total})')
+                    f'[SIM] /attached_object="" 주입 (잔여 {total})')

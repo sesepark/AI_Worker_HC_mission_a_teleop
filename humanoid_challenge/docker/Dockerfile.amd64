@@ -138,7 +138,7 @@ RUN mkdir -p ${COLCON_WS}/src && \
 RUN touch ${COLCON_WS}/yolo_venv/COLCON_IGNORE ${COLCON_WS}/ocr_venv/COLCON_IGNORE
 
 # Some non-venv nodes use scipy directly from system Python, and the
-# ai_worker_manipulation GPD wrapper imports Open3D directly.
+# manipulation GPD wrapper imports Open3D directly.
 RUN python3 -m pip config set global.break-system-packages true && \
     python3 -m pip install --no-cache-dir --ignore-installed "psutil>=7" && \
     python3 -m pip install --no-cache-dir \

@@ -3,14 +3,14 @@
 
 Mission A 자율 시나리오 상태 기계 (rclpy Node).
 P0 구현: 패키지화 + task_list 로직 + state timeout + --sim 모드.
-Perception 입력(`/perception/wrist/target_one_pose`, `/monitor_ocr/result`,
-`/detections`)은 검증됨. Manipulation 연동(A3_PICK/PLACE Action)은 Phase 2 TODO.
+Perception 입력(`/perception/wrist/target_one_pose`, `/detections`)은 검증됨.
+모니터 OCR task list는 `/mission_a/task_list` 서비스로만 받는다.
+Manipulation 연동(A3_PICK/PLACE Action)은 Phase 2 TODO.
 
 Reference: humanoid_challenge/docs/MISSION_A_SCENARIO_PLAN.md "mission_a.py 초안 작성 계획"
 """
 from __future__ import annotations
 
-import json
 from enum import Enum, auto
 
 import rclpy
@@ -20,10 +20,15 @@ from geometry_msgs.msg import PoseStamped
 
 from mission.task_list import TaskList, CLASS_TO_PART_NAME
 
-# perception_part_detector message package may not yet be on PYTHONPATH
+try:
+    from mission_interfaces.srv import GetTaskList
+except ImportError:
+    GetTaskList = None
+
+# perception message package may not yet be on PYTHONPATH
 # during early phases — guard the import so the node still starts.
 try:
-    from perception_part_detector.msg import PartDetectionArray
+    from perception.msg import PartDetectionArray
 except ImportError:
     PartDetectionArray = None  # type: ignore[assignment]
 
@@ -36,11 +41,10 @@ GRASP_ASSESSMENT_ENABLED = False  # flip to True after Hand-Eye Calibration
 # Timeout (seconds)
 TIMEOUT_INIT       = 60
 TIMEOUT_A1_MONITOR = 90
-TIMEOUT_A1_OCR     = 20
+TIMEOUT_A1_OCR     = 20.0
 TIMEOUT_A2_SCAN    = 90
 TIMEOUT_PICK_PLACE = 45
 TIMEOUT_VERIFY     = 20
-FALLBACK_OK_DELAY  = 10   # OCR 실패 시 강제 OK 딜레이
 
 MAX_RECOVERY_RETRY = 3
 
@@ -81,18 +85,22 @@ class MissionA(Node):
         # --- Parameters ---
         self.sim_mode = bool(
             self.declare_parameter('sim_mode', False).value)
+        self.task_list_service_name = str(
+            self.declare_parameter('task_list_service_name', '/mission_a/task_list').value)
+        self.task_list_service_timeout_sec = float(
+            self.declare_parameter('task_list_service_timeout_sec', float(TIMEOUT_A1_OCR)).value)
+        self.task_list_service_frame_count = int(
+            self.declare_parameter('task_list_service_frame_count', 3).value)
 
         # --- Subscribers ---
         self.sub_manipulator_state = self.create_subscription(
             String, '/manipulator_state', self._on_manipulator_state, 10)
-        self.sub_monitor_ocr = self.create_subscription(
-            String, '/monitor_ocr/result', self._on_monitor_ocr, 10)
         if PartDetectionArray is not None:
             self.sub_detections = self.create_subscription(
                 PartDetectionArray, '/detections', self._on_detections, 10)
         else:
             self.get_logger().warning(
-                'perception_part_detector.msg not importable — '
+                'perception.msg not importable — '
                 '/detections subscription disabled. Build the message package '
                 'and re-source the workspace.')
             self.sub_detections = None
@@ -102,10 +110,16 @@ class MissionA(Node):
             self._on_target_pose, 10)
         self.sub_attached_object = self.create_subscription(
             String, '/attached_object', self._on_attached_object, 10)
-        # Perception task_management 의 잔여 task list (OCR목표 − 트레이관측).
-        # 발행되면 이게 task 진행의 source of truth → OCR 자체파싱/차감 불필요.
-        self.sub_task_list = self.create_subscription(
-            String, '/perception/task_list', self._on_task_list, 10)
+
+        # --- Service clients ---
+        self.task_list_client = None
+        if GetTaskList is not None:
+            self.task_list_client = self.create_client(
+                GetTaskList, self.task_list_service_name)
+        else:
+            self.get_logger().warning(
+                'mission_interfaces.srv.GetTaskList not importable — '
+                'task_list service client disabled.')
 
         # --- Publishers ---
         self.pub_active_mission = self.create_publisher(
@@ -120,11 +134,9 @@ class MissionA(Node):
         self.recovery_count: int = 0
         self.cycle: int = 0                 # scan→pick→place 루프 카운터 (sim 키)
         self._state_enter_time: float = self._now()
-        self._fallback_done: bool = False   # A1 강제 OK 1회 표식
 
         # Latest topic snapshots (None until first message)
         self.last_manipulator_state: str | None = None
-        self.last_ocr_result: dict | None = None
         self.last_detections = None
         self.last_target_pose: PoseStamped | None = None
         self.last_attached_object: str | None = None
@@ -133,9 +145,8 @@ class MissionA(Node):
         self.task_list: TaskList = TaskList()
         self.current_target_pose: PoseStamped | None = None
         self.current_pick_class: str | None = None
-        # /perception/task_list 가 한 번이라도 오면 perception 이 task 상태를 소유.
-        self._perception_owns_tasklist: bool = False
-        self._tasklist_baseline: int = 0   # VERIFY 시 차감 확인용 스냅샷
+        self._task_list_service_inflight: bool = False
+        self._task_list_service_next_try_time: float = 0.0
 
         # --- Sim driver (optional) ---
         self._sim = None
@@ -168,15 +179,6 @@ class MissionA(Node):
         self.last_manipulator_state = msg.data
         self.get_logger().debug(f'[sub] /manipulator_state = {msg.data}')
 
-    def _on_monitor_ocr(self, msg: String) -> None:
-        try:
-            self.last_ocr_result = json.loads(msg.data)
-            self.get_logger().info(
-                '[sub] /monitor_ocr/result received '
-                f'(screen_detected={self.last_ocr_result.get("latest_screen_detected")})')
-        except json.JSONDecodeError as e:
-            self.get_logger().error(f'/monitor_ocr/result JSON decode failed: {e}')
-
     def _on_detections(self, msg) -> None:
         self.last_detections = msg
         self.get_logger().debug('[sub] /detections received')
@@ -189,19 +191,54 @@ class MissionA(Node):
         self.last_attached_object = msg.data
         self.get_logger().debug(f'[sub] /attached_object = "{msg.data}"')
 
-    def _on_task_list(self, msg: String) -> None:
-        """Perception 잔여 task list 수신 → task_list 갱신 (source of truth)."""
-        try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError as e:
-            self.get_logger().error(f'/perception/task_list JSON decode failed: {e}')
+    def _request_task_list_service(self) -> None:
+        if GetTaskList is None or self.task_list_client is None:
             return
-        self.task_list.build_from_task_list_payload(payload.get('parts', []))
-        if not self._perception_owns_tasklist:
-            self._perception_owns_tasklist = True
-            self.get_logger().info(
-                '[sub] /perception/task_list 수신 — perception 이 task 상태 소유 '
-                f'(OCR 자체파싱 비활성). {self.task_list}')
+        if self._task_list_service_inflight or self._now() < self._task_list_service_next_try_time:
+            return
+
+        if not self.task_list_client.service_is_ready():
+            self.get_logger().warn(
+                f'task_list service not ready: {self.task_list_service_name}',
+                throttle_duration_sec=5.0)
+            self._task_list_service_next_try_time = self._now() + 1.0
+            return
+
+        request = GetTaskList.Request()
+        request.timeout_sec = float(self.task_list_service_timeout_sec)
+        request.frame_count = int(self.task_list_service_frame_count)
+
+        self._task_list_service_inflight = True
+        self._task_list_service_next_try_time = self._now() + max(1.0, request.timeout_sec)
+        self.get_logger().info(
+            f'[A1_MONITOR] task_list service 요청: {self.task_list_service_name}')
+
+        future = self.task_list_client.call_async(request)
+        future.add_done_callback(self._on_task_list_service_result)
+
+    def _on_task_list_service_result(self, future) -> None:
+        self._task_list_service_inflight = False
+
+        try:
+            response = future.result()
+        except Exception as exc:
+            self._task_list_service_next_try_time = self._now() + 2.0
+            self.get_logger().warn(f'task_list service failed: {exc}')
+            return
+
+        self._task_list_service_next_try_time = self._now() + 2.0
+        if not response.success:
+            self.get_logger().warn(f'task_list service failed: {response.message}')
+            return
+
+        parts = [
+            {'name': item.name, 'count': item.count}
+            for item in response.parts
+        ]
+        self.task_list.build_from_ocr_parts(parts)
+        self.get_logger().info(
+            f'[A1_MONITOR] task_list service result: {self.task_list} '
+            f'(frames={response.frames_used})')
 
     # ----------------------------------------------------------------------- #
     # State dispatch
@@ -253,39 +290,19 @@ class MissionA(Node):
             self._transition(State.A1_MONITOR)
 
     def _run_a1_monitor(self) -> None:
-        # 1순위: perception /perception/task_list (트레이 비전 자동 차감, source of truth)
-        if self._perception_owns_tasklist and not self.task_list.is_empty():
+        if not self.task_list.is_empty():
             total = self.task_list.total_remaining()
-            # TODO(Phase1): 모니터에 OK 사인 출력
             if total > 0:
                 self.get_logger().info(
-                    f'[A1_MONITOR] perception task_list 확정: {self.task_list} '
+                    f'[A1_MONITOR] service task_list 확정: {self.task_list} '
                     f'(총 {total}) -> A2_SCAN')
                 self._transition(State.A2_SCAN)
             else:
-                self.get_logger().info('[A1_MONITOR] perception task_list 잔여 0 -> VERIFY')
+                self.get_logger().info('[A1_MONITOR] service task_list 잔여 0 -> VERIFY')
                 self._transition(State.VERIFY)
             return
 
-        # 2순위(폴백): OCR 직접 파싱 (management_node 미가동 시)
-        if self.last_ocr_result and self.last_ocr_result.get('latest_screen_detected'):
-            parts = self.last_ocr_result.get('parts', [])
-            self.task_list.build_from_ocr_parts(parts)
-            if not self.task_list.is_empty():
-                self.get_logger().info(
-                    f'[A1_MONITOR] (OCR 폴백) task_list: {self.task_list} '
-                    f'(총 {self.task_list.total_remaining()}) -> A2_SCAN')
-                self._transition(State.A2_SCAN)
-                return
-
-        # 폴백: FALLBACK_OK_DELAY 경과 시 강제 OK (점수 10점 확보)
-        if not self._fallback_done and self._elapsed() >= FALLBACK_OK_DELAY:
-            self._fallback_done = True
-            self.get_logger().warning(
-                f'[A1_MONITOR] OCR {FALLBACK_OK_DELAY}s 내 미파싱 -> '
-                '강제 OK 폴백 (task_list 비어있음)')
-            # TODO(Phase1): 강제 OK 사인 출력. 빈 task_list 면 VERIFY 에서 즉시 DONE.
-            self._transition(State.A2_SCAN)
+        self._request_task_list_service()
 
     def _run_a2_scan(self) -> None:
         # planner 가 task 필터링까지 수행 → 최종 1개 target 수신 대기
@@ -298,15 +315,13 @@ class MissionA(Node):
                 return
             self.current_target_pose = self.last_target_pose
             self.last_target_pose = None  # consume
-            # VERIFY 에서 트레이 차감 확인용 잔여 스냅샷
-            self._tasklist_baseline = self.task_list.total_remaining()
             p = self.current_target_pose.pose.position
             self.get_logger().info(
                 f'[A2_SCAN] target 수신 ({p.x:.3f},{p.y:.3f},{p.z:.3f}) -> A3_PICK')
             self._transition(State.A3_PICK)
             return
 
-        # task 가 비었으면 (폴백 경로) 스캔할 것 없음 → VERIFY 로 보내 DONE 처리
+        # task 가 비었으면 스캔할 것 없음 → VERIFY 로 보내 DONE 처리
         if self.task_list.is_empty():
             self.get_logger().info('[A2_SCAN] task_list 비어있음 -> VERIFY (완료 판정)')
             self._transition(State.VERIFY)
@@ -338,25 +353,7 @@ class MissionA(Node):
             self._transition(State.RECOVERY)
 
     def _run_verify(self) -> None:
-        # perception 소유: 트레이 비전이 차감 → /perception/task_list 가 줄었는지 확인
-        if self._perception_owns_tasklist:
-            cur = self.task_list.total_remaining()
-            if cur < self._tasklist_baseline:
-                self.get_logger().info(
-                    f'[VERIFY] 트레이 적재 검증 (잔여 {self._tasklist_baseline}→{cur})')
-            elif not self._timed_out():
-                return  # 아직 트레이에 안 잡힘 → 대기
-            else:
-                self.get_logger().warning('[VERIFY] 차감 미확인 timeout — 진행')
-            if cur > 0:
-                self.get_logger().info('[VERIFY] 잔여 > 0 -> A2_SCAN 복귀')
-                self._transition(State.A2_SCAN)
-            else:
-                self.get_logger().info('[VERIFY] 잔여 0 -> DONE')
-                self._transition(State.DONE)
-            return
-
-        # 레거시(OCR 직접 / sim-without-mgmt): 자체 차감 (성공 가정)
+        # 현재는 `/mission_a/task_list`로 받은 OCR 목표를 mission_a가 자체 차감한다.
         if self.current_pick_class:
             left = self.task_list.decrement(self.current_pick_class)
             kor = CLASS_TO_PART_NAME.get(self.current_pick_class, self.current_pick_class)

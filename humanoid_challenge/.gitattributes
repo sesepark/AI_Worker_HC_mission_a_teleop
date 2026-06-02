@@ -1,0 +1,12 @@
+# Keep team-authored text files on LF line endings across platforms.
+* text=auto eol=lf
+
+# Preserve binary artifacts.
+*.bin binary
+*.caffemodel binary
+*.jpeg binary
+*.jpg binary
+*.pgm binary
+*.png binary
+*.pt binary
+*.stl binary

@@ -13,11 +13,9 @@ ROBOTIS AI Worker 기반 휴머노이드 챌린지 통합 레포. Perception / M
 AI_Worker_HC/
 ├── ai_worker/              # ROBOTIS 공식 (로봇 bringup 등) — 수정 금지
 ├── humanoid_challenge/     # 휴머노이드 챌린지 Mission A 팀 개발 패키지
-│   ├── monitor_ocr/                      # 지령 모니터 OCR
-│   ├── perception_part_detector/         # YOLO 부품 검출
-│   ├── perception_2d_to_pcd(_wrist)/     # 2D→3D pose/PCD
-│   ├── task_management/                  # 트레이 검출 + 잔여 task 관리
-│   ├── ai_worker_manipulation/           # MoveIt/GPD/pick-place primitives
+│   ├── perception/                       # OCR / YOLO / 2D→3D / tray occupancy 통합 perception 패키지
+│   ├── mission_interfaces/               # Mission-Perception 서비스/메시지 인터페이스
+│   ├── manipulation/                     # MoveIt/GPD/pick-place primitives
 │   ├── mission/                          # System 팀 — Mission A 상태기계
 │   └── docs/                             # 설계·인터페이스·실행 문서
 ├── physical_ai_tools/      # ROBOTIS 공식 — 수정 금지
@@ -29,28 +27,24 @@ AI_Worker_HC/
 
 ---
 
-## 이번 세션 진행 내용 (2026-05-30 ~ 05-31)
+## 최근 정리 내용
 
-### 1) Perception 로컬 구동 검증 ✅
-- 도커 이미지(`ros2_jazzy_robotis_perception`) 빌드 + venv + colcon + 실로봇 bringup 으로 구동.
-- **`monitor_ocr` 제외 전 노드 정상 작동 확인** (detector / projection / wrist 파이프라인 / grasp planner).
-- `monitor_ocr` 는 노드 로직은 정상이나 `ocr_venv` 의존성 누락 블로커 (재생성 필요).
-- 두 함정 정리: ① `ros2 run` 의 venv shebang 문제 ② ocr_venv 의존성 오염 → [PERCEPTION_LOCAL_SETUP.md](humanoid_challenge/docs/PERCEPTION_LOCAL_SETUP.md)
+### 1) Perception 패키지 통합
+- `monitor_ocr`, 부품 YOLO, head/wrist 2D→3D projection, tray occupancy primitive를 `perception` 단일 ROS 패키지로 통합.
+- 내부 기능은 `perception_nodes/{monitor_ocr,part_detector,head_projection,wrist_projection,tray_occupancy}` 아래에 둔다.
+- task list와 tray detection은 토픽 누적 로직 대신 `mission_interfaces` 서비스로 mission 쪽에서 요청한다.
 
-### 2) Perception 신규 `task_management` 반영 ✅ (upstream `demo/senario_A`)
-트레이 비전으로 적재 진행을 자동 추적하는 파이프라인:
+### 2) Mission 서비스 연동
 ```
-detector(/detections) + ZED RGB → tray_occupancy_node → /perception/tray_contents
-                                  /monitor_ocr/result  → management_node → /perception/task_list
-                                                          (잔여 = OCR목표 − 트레이관측)
+/mission_a/task_list       # monitor OCR 결과 요청
+/mission_a/tray_detections # tray/part primitive detection 요청
 ```
-→ `mission_a` 가 `/perception/task_list` 만 보면 OCR 파싱·자체 차감 불필요, 트레이 비전이 자동 검증.
+→ perception은 primitive detection/OCR을 제공하고, 파싱·정규화·수량 관리는 mission 쪽에서 수행한다.
 
-### 3) `mission_a` 구현 ✅ (System)
+### 3) `mission_a` 구현
 - `humanoid_challenge/mission/` 를 ament_python 패키지 `mission` 으로 구성 → `ros2 run mission mission_a`.
 - FSM: `INIT→A1_MONITOR→A2_SCAN→A3_PICK→A3_PLACE→VERIFY→DONE` (+RECOVERY/MANUAL_WAIT).
-- `/perception/task_list` 우선 소비(없으면 OCR 폴백), `/perception/wrist/target_one_pose` 구독,
-  state timeout, A1 10초 폴백, VERIFY 트레이 차감 검증.
+- `/mission_a/task_list` 서비스로 OCR 지령을 받고, `/perception/wrist/target_one_pose`를 구독한다.
 - **`--sim` 모드로 전체 루프 검증 통과** (트레이 차감 3→2→1→0 → DONE).
   ```bash
   export ROS_DOMAIN_ID=99 ROS_LOCALHOST_ONLY=1
@@ -75,17 +69,17 @@ detector(/detections) + ZED RGB → tray_occupancy_node → /perception/tray_con
 
 | 파일 | 다운로드 |
 |------|----------|
-| `humanoid_challenge/perception_part_detector/weights/best.pt` | [Drive](https://drive.google.com/file/d/17BepvzEurXIQbh3F9X3SQDCB8iaqLkWC/view) |
-| `humanoid_challenge/monitor_ocr/best.pt` | [Drive](https://drive.google.com/file/d/14H48riKH3KkKxky2yrCMufPfiGz6gfa0/view) |
-| `humanoid_challenge/task_management/models/tray_best.pt` (파랑 트레이) | [Drive: blue_tray_yolo](https://drive.google.com/drive/folders/1MzRzf27wtmPqp8-KqR9iH_AnrLsgaPOU?usp=sharing) |
+| `humanoid_challenge/perception/model/part_detector_best.pt` | [Drive](https://drive.google.com/file/d/17BepvzEurXIQbh3F9X3SQDCB8iaqLkWC/view) |
+| `humanoid_challenge/perception/model/monitor_ocr_best.pt` | [Drive](https://drive.google.com/file/d/14H48riKH3KkKxky2yrCMufPfiGz6gfa0/view) |
+| `humanoid_challenge/perception/model/tray_occupancy_best.pt` (파랑 트레이) | [Drive: blue_tray_yolo](https://drive.google.com/drive/folders/1MzRzf27wtmPqp8-KqR9iH_AnrLsgaPOU?usp=sharing) |
 
-`task_management`의 tray 모델은 `TRAY_MODEL_PATH` 환경 변수나 `tray_model_path` launch argument로 다른 경로를 지정할 수 있다.
+tray 모델은 `TRAY_MODEL_PATH` 환경 변수나 `tray_model_path` launch argument로 다른 경로를 지정할 수 있다.
 
 ---
 
 ## 남은 작업
-- [ ] `monitor_ocr` ocr_venv 재생성 → 실 OCR → `/perception/task_list` 라이브 검증
-- [ ] 트레이 YOLO 모델 `tray_best.pt` 배치
+- [ ] 실제 헤드 카메라 입력으로 monitor OCR 라이브 검증
+- [ ] 트레이 YOLO 모델 `tray_occupancy_best.pt` 배치
 - [ ] A3_PLACE용 트레이 base_link place 좌표 인터페이스 협의 (현재 tray_contents 는 2D 카운트만)
 - [ ] Phase 2 Manipulation 연동 (`bin_pick`/`tray_place` Action)
 - [ ] CM 토픽명(`/active_mission`, `/manipulator_state`, `/attached_object`) 전 팀 합의

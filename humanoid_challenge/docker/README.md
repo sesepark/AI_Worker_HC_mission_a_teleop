@@ -1,7 +1,7 @@
 # humanoid_challenge Docker
 
-This Docker setup runs the local `humanoid_challenge` ROS 2 packages on top of
-`ros:jazzy-ros-base`.
+This Docker setup runs the local `humanoid_challenge` ROS 2 packages inside the
+fixed Docker Hub image `shpark1104/humanoid_challenge:jazzy`.
 
 ## Usage
 
@@ -12,27 +12,23 @@ cd humanoid_challenge/docker
 ./container.sh stop
 ```
 
-`start` builds the Docker image only when the configured image tag is missing,
-starts the container, builds the mounted GPD source, then runs
-`colcon build --symlink-install` for the main-PC ROS packages:
-`perception_part_detector`, `monitor_ocr`, `perception_2d_to_pcd`,
-`perception_2d_to_pcd_wrist`, `task_management`, and `mission`.
+`start` pulls the configured image only when it is missing and starts the
+container. It does not build the image, GPD, or ROS packages.
 
-Use `./container.sh build` to force a local image rebuild after changing the
-Dockerfile or image-level dependencies. To run a prebuilt image from a
-registry, set `HUMANOID_CHALLENGE_IMAGE`, for example:
+To override the image, set `HUMANOID_CHALLENGE_IMAGE`, for example:
 
 ```bash
-HUMANOID_CHALLENGE_IMAGE=your-dockerhub-id/humanoid_challenge:jazzy ./container.sh pull
-HUMANOID_CHALLENGE_IMAGE=your-dockerhub-id/humanoid_challenge:jazzy ./container.sh start
+HUMANOID_CHALLENGE_IMAGE=your-dockerhub-id/humanoid_challenge:tag ./container.sh pull
+HUMANOID_CHALLENGE_IMAGE=your-dockerhub-id/humanoid_challenge:tag ./container.sh start
 ```
 
-`ai_worker_manipulation` is not built by default because several of its console
-scripts can command MoveIt/gripper controllers over ROS 2. Build it explicitly
-with:
+Build the mounted ROS packages manually inside the container after changing
+source:
 
 ```bash
-./container.sh colcon-all
+cd /ws
+colcon build --symlink-install --base-paths /ws/src/humanoid_challenge \
+  --packages-up-to perception mission
 ```
 
 The local source tree is mounted at:
@@ -41,8 +37,8 @@ The local source tree is mounted at:
 /ws/src/humanoid_challenge
 ```
 
-The image does not copy or build the vendored GPD source. `container.sh` builds
-the currently mounted source from `humanoid_challenge/gpd` into:
+The image does not copy or build the vendored GPD source. Build the currently
+mounted source from `humanoid_challenge/gpd` manually when that path is needed:
 
 ```text
 /ws/src/humanoid_challenge/gpd/build
@@ -51,8 +47,7 @@ the currently mounted source from `humanoid_challenge/gpd` into:
 `GPD_DIR=/ws/src/humanoid_challenge/gpd` is exported in the container. The GPD
 wrapper runs `detect_grasps` from the `build/` directory so the upstream
 `../cfg` and `../models` paths in `cfg/eigen_params.cfg` resolve correctly.
-After changing GPD source, run `./container.sh gpd` or `./container.sh start`;
-the CMake build is incremental and does not require rebuilding the Docker image.
+The CMake build is incremental and does not require rebuilding the Docker image.
 
 This container does not mount `/dev` and does not run privileged. The ROS nodes
 are intended to consume topics published by the robot over the ROS 2 network,
@@ -90,29 +85,27 @@ Python packages:
 - Both venvs install CPU-only `torch` and `torchvision` from
   `https://download.pytorch.org/whl/cpu` before installing `ultralytics`.
 
-`open3d` is installed in system Python because `ai_worker_manipulation`'s
+`open3d` is installed in system Python because `manipulation`'s
 `gpd_dual_view` path imports it directly.
 
 Vendored/runtime source:
 
-- `humanoid_challenge/gpd` is mounted from the local checkout and built by
-  `container.sh`, not baked into the image.
+- `humanoid_challenge/gpd` is mounted from the local checkout and is not baked
+  into the image.
 - The vendored source was copied from the original `ai-worker-ws` `gpd`
   submodule, commit `6327f20eabfcba41a05fdd2e2ba408153dc2e958`.
 - `pymoveit2` is not vendored here because Jazzy provides it as
-  `ros-jazzy-pymoveit2`, and `ai_worker_manipulation/package.xml` already
+  `ros-jazzy-pymoveit2`, and `manipulation/package.xml` already
   declares `<depend>pymoveit2</depend>`.
 
 The venv paths match the existing launch files and detector shebangs.
 
 ## Hardware Access Audit
 
-- Perception packages subscribe to robot-published image/depth/camera info/TF
+- The `perception` package subscribes to robot-published image/depth/camera info/TF
   topics such as `/zed/...` and `/camera_*`; they do not open local ZED,
   RealSense, USB, or serial devices.
-- `monitor_ocr/test_realtime.py` has a local `cv2.VideoCapture(...)` path for
-  webcam testing only. It is not used by the ROS launch path.
-- `ai_worker_manipulation` contains MoveIt2 and gripper controller clients. It
+- `manipulation` contains MoveIt2 and gripper controller clients. It
   does not use `/dev` directly, but running its console scripts can publish
   robot controller commands over ROS 2 if the robot graph is reachable.
 
@@ -121,13 +114,12 @@ The venv paths match the existing launch files and detector shebangs.
 The image does not include model weights. Put them in the local source tree:
 
 ```text
-humanoid_challenge/perception_part_detector/weights/best.pt
-humanoid_challenge/monitor_ocr/best.pt
-humanoid_challenge/task_management/models/tray_best.pt
+humanoid_challenge/perception/model/part_detector_best.pt
+humanoid_challenge/perception/model/monitor_ocr_best.pt
+humanoid_challenge/perception/model/tray_occupancy_best.pt
 ```
 
-The container script creates the `weights/` directory if it is missing, so the
-ROS packages can still build. It also creates `task_management/models/` for the
-tray detector. Runtime YOLO/OCR/tray startup still needs the actual `.pt` files.
-The tray model path can be overridden with the `TRAY_MODEL_PATH` environment
-variable or the `tray_model_path` launch argument.
+The container script creates `perception/model/` if it is missing, so the ROS
+packages can still build. Runtime YOLO/OCR/tray startup still needs the actual
+`.pt` files. The tray model path can be overridden with the `TRAY_MODEL_PATH`
+environment variable or the `tray_model_path` launch argument.

@@ -1,0 +1,80 @@
+cmake_minimum_required(VERSION 3.8)
+project(perception)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/PartDetection.msg"
+  "msg/PartDetectionArray.msg"
+  DEPENDENCIES std_msgs
+)
+
+ament_python_install_package(perception_nodes)
+
+install(PROGRAMS
+  perception_nodes/part_detector/detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME detector_node
+)
+install(PROGRAMS
+  perception_nodes/monitor_ocr/monitor_ocr_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME monitor_ocr_node
+)
+install(PROGRAMS
+  perception_nodes/head_projection/projection_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME head_projection_node
+)
+install(PROGRAMS
+  perception_nodes/head_projection/pointcloud_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME head_pointcloud_node
+)
+install(PROGRAMS
+  perception_nodes/head_projection/grasp_pcd_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME head_grasp_pcd_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_projection/wrist_projection_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wrist_projection_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_projection/wrist_pointcloud_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wrist_pointcloud_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_projection/wrist_grasp_pcd_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wrist_grasp_pcd_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_projection/wrist_task_grasp_planner_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wrist_task_grasp_planner_node
+)
+install(PROGRAMS
+  perception_nodes/tray_occupancy/tray_occupancy_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME tray_occupancy_node
+)
+
+install(DIRECTORY
+  launch
+  config
+  model
+  DESTINATION share/${PROJECT_NAME}
+)
+
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

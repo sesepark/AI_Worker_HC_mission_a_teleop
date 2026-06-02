@@ -10,8 +10,9 @@
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>mission_interfaces</depend>
   <!-- /detections 구독 시 필요. 메시지 패키지 빌드 후 활성 -->
-  <exec_depend>perception_part_detector</exec_depend>
+  <exec_depend>perception</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -6,36 +6,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 CONTAINER_NAME="humanoid_challenge"
-IMAGE_NAME="${HUMANOID_CHALLENGE_IMAGE:-humanoid_challenge:jazzy}"
-
-MAIN_PC_ROS_PACKAGES=(
-    perception_part_detector
-    monitor_ocr
-    perception_2d_to_pcd
-    perception_2d_to_pcd_wrist
-    task_management
-    mission
-)
-
-ALL_ROS_PACKAGES=(
-    "${MAIN_PC_ROS_PACKAGES[@]}"
-    ai_worker_manipulation
-)
+IMAGE_NAME="${HUMANOID_CHALLENGE_IMAGE:-shpark1104/humanoid_challenge:jazzy}"
 
 show_help() {
     echo "Usage: $0 [command]"
     echo ""
     echo "Commands:"
-    echo "  start     Build image if needed, start container, build GPD, and build ROS packages"
-    echo "  build     Build/rebuild the Docker image"
-    echo "  pull      Pull HUMANOID_CHALLENGE_IMAGE from a registry"
-    echo "  gpd       Build/rebuild mounted GPD source inside the container"
-    echo "  colcon    Build main-PC ROS packages inside the container"
-    echo "  colcon-all"
-    echo "            Build all ROS packages, including ai_worker_manipulation"
+    echo "  start     Pull the fixed image if needed and start the container"
+    echo "  pull      Pull the fixed Docker image"
     echo "  enter     Enter the running container"
     echo "  stop      Stop and remove the container"
-    echo "  restart   Stop, start, and rebuild ROS packages"
+    echo "  restart   Stop and start the container"
     echo "  logs      Follow container logs"
     echo "  help      Show this help message"
 }
@@ -56,28 +37,22 @@ setup_x11() {
 
 prepare_workspace() {
     mkdir -p "${SCRIPT_DIR}/workspace"
-    mkdir -p "${PROJECT_DIR}/perception_part_detector/weights"
-    mkdir -p "${PROJECT_DIR}/task_management/models"
+    mkdir -p "${PROJECT_DIR}/perception/model"
 
-    if [ ! -f "${PROJECT_DIR}/perception_part_detector/weights/best.pt" ]; then
-        echo "Warning: perception_part_detector/weights/best.pt is missing."
+    if [ ! -f "${PROJECT_DIR}/perception/model/part_detector_best.pt" ]; then
+        echo "Warning: perception/model/part_detector_best.pt is missing."
         echo "         detector_node will build, but YOLO startup needs that model file."
     fi
 
-    if [ ! -f "${PROJECT_DIR}/monitor_ocr/best.pt" ]; then
-        echo "Warning: monitor_ocr/best.pt is missing."
-        echo "         monitor_ocr will build, but YOLO-assisted OCR startup needs that model file."
+    if [ ! -f "${PROJECT_DIR}/perception/model/monitor_ocr_best.pt" ]; then
+        echo "Warning: perception/model/monitor_ocr_best.pt is missing."
+        echo "         monitor_ocr_node will build, but YOLO-assisted OCR startup needs that model file."
     fi
 
-    if [ ! -f "${PROJECT_DIR}/task_management/models/tray_best.pt" ]; then
-        echo "Warning: task_management/models/tray_best.pt is missing."
+    if [ ! -f "${PROJECT_DIR}/perception/model/tray_occupancy_best.pt" ]; then
+        echo "Warning: perception/model/tray_occupancy_best.pt is missing."
         echo "         tray_occupancy_node will build, but tray YOLO startup needs that model file."
     fi
-}
-
-build_image() {
-    echo "Building humanoid_challenge Docker image..."
-    compose build
 }
 
 pull_image() {
@@ -87,17 +62,11 @@ pull_image() {
 
 ensure_image() {
     if docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
-        echo "Docker image ${IMAGE_NAME} already exists. Skipping image build."
+        echo "Docker image ${IMAGE_NAME} already exists."
         return
     fi
 
-    if [ "${IMAGE_NAME}" != "humanoid_challenge:jazzy" ]; then
-        pull_image
-        return
-    fi
-
-    echo "Docker image ${IMAGE_NAME} is missing. Building it now..."
-    build_image
+    pull_image
 }
 
 is_running() {
@@ -111,64 +80,6 @@ start_container() {
     echo "Starting humanoid_challenge container..."
     ensure_image
     compose up -d
-    build_gpd
-    build_workspace_main
-}
-
-build_gpd() {
-    if ! is_running; then
-        echo "Container is not running. Starting it first..."
-        setup_x11
-        prepare_workspace
-        ensure_image
-        compose up -d
-    fi
-
-    echo "Building GPD from mounted source..."
-    docker exec "${CONTAINER_NAME}" bash -lc "
-        set -e
-        export GPD_DIR=/ws/src/humanoid_challenge/gpd
-        test -d \"\${GPD_DIR}\" || { echo \"Missing GPD source: \${GPD_DIR}\" >&2; exit 1; }
-        cmake -S \"\${GPD_DIR}\" -B \"\${GPD_DIR}/build\" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_OPENVINO=OFF \
-            -DUSE_CAFFE=OFF \
-            -DUSE_OPENCV=OFF \
-            -DBUILD_DATA_GENERATION=OFF
-        cmake --build \"\${GPD_DIR}/build\" --parallel \"\$(nproc)\" --target gpd_detect_grasps
-        ln -sf \"\${GPD_DIR}/build/detect_grasps\" /usr/local/bin/detect_grasps
-    "
-}
-
-build_workspace() {
-    local packages=("$@")
-
-    if ! is_running; then
-        echo "Container is not running. Starting it first..."
-        setup_x11
-        prepare_workspace
-        ensure_image
-        compose up -d
-    fi
-
-    echo "Building ROS packages in /ws..."
-    docker exec "${CONTAINER_NAME}" bash -lc "
-        set -e
-        source /opt/ros/jazzy/setup.bash
-        cd /ws
-        colcon build --symlink-install \
-            --base-paths /ws/src/humanoid_challenge \
-            --packages-up-to ${packages[*]}
-    "
-}
-
-build_workspace_main() {
-    build_workspace "${MAIN_PC_ROS_PACKAGES[@]}"
-}
-
-build_workspace_all() {
-    build_gpd
-    build_workspace "${ALL_ROS_PACKAGES[@]}"
 }
 
 enter_container() {
@@ -203,23 +114,8 @@ case "${1:-help}" in
     start)
         start_container
         ;;
-    build)
-        prepare_workspace
-        build_image
-        ;;
     pull)
         pull_image
-        ;;
-    gpd)
-        build_gpd
-        ;;
-    colcon)
-        prepare_workspace
-        build_workspace_main
-        ;;
-    colcon-all)
-        prepare_workspace
-        build_workspace_all
         ;;
     enter)
         enter_container

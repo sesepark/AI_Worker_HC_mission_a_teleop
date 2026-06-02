@@ -6,7 +6,6 @@
 
 Reference:
 - 5종 부품 class: humanoid_challenge/docs/PERCEPTION_INTERFACE.md "5종 부품 class"
-- OCR JSON 구조: 같은 문서 monitor_ocr_node "/monitor_ocr/result JSON 구조"
 """
 from __future__ import annotations
 
@@ -29,27 +28,7 @@ CLASS_TO_PART_NAME: dict[str, str] = {
     'dome_nut': '돔 너트',
 }
 
-# Perception task_management 의 canonical 표기(공백, 소문자) → detector class_name.
-# 주의: canonical 은 'dom nut' (perception name_utils.py), 우리 class 는 'dome_nut'.
-CANONICAL_TO_CLASS: dict[str, str] = {
-    'flange nut': 'flange_nut',
-    'gear ring': 'gear_ring',
-    'spacer ring': 'spacer_ring',
-    'hex nut': 'hex_nut',
-    'dom nut': 'dome_nut',
-    'dome nut': 'dome_nut',
-}
-
 VALID_CLASSES = frozenset(PART_NAME_TO_CLASS.values())
-
-
-def canonical_to_class(name: str) -> str | None:
-    """Perception canonical 부품명('flange nut') → class_name. 실패 시 None.
-
-    공백/대소문자/언더스코어 정규화 후 매칭 (예: 'Flange_Nut' → 'flange_nut').
-    """
-    key = ' '.join(str(name).strip().lower().replace('_', ' ').split())
-    return CANONICAL_TO_CLASS.get(key)
 
 
 def normalize_part_name(name: str) -> str:
@@ -90,29 +69,6 @@ class TaskList:
             if count <= 0:
                 continue
             self._remaining[cls] = self._remaining.get(cls, 0) + count
-        return self
-
-    def build_from_task_list_payload(self, parts: list[dict]) -> 'TaskList':
-        """Perception `/perception/task_list` parts 배열 → task_list.
-
-        parts = [{'name': 'flange nut', 'count': <잔여>}, ...] (canonical 표기).
-        count 는 이미 '잔여'(OCR목표 − 트레이관측) 이므로 그대로 사용.
-        management_node 가 항상 5종을 발행 → count 0 도 그대로 반영.
-        """
-        self._remaining.clear()
-        self.unmapped.clear()
-        for item in parts or []:
-            cls = canonical_to_class(item.get('name', ''))
-            if cls is None:
-                self.unmapped.append(str(item.get('name', '')))
-                continue
-            try:
-                count = int(item.get('count', 0))
-            except (TypeError, ValueError):
-                count = 0
-            # 0 도 저장 (빌드됨 표시 → is_empty() False). 음수는 0 으로.
-            self._remaining[cls] = max(0, count)
-        # 전부 0 이어도 '빌드됨' 으로 보이게: 모두 0 이면 is_complete()=True 가 맞음
         return self
 
     # ── 조회 ──────────────────────────────────────────────────────────────
