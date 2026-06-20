@@ -68,6 +68,21 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME tray_occupancy_node
 )
+install(PROGRAMS
+  perception_nodes/tray_occupancy/tray_contents_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME tray_contents_node
+)
+install(PROGRAMS
+  perception_nodes/management/management_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME management_node
+)
+install(PROGRAMS
+  perception_nodes/monitor_ocr/monitor_ocr_topic_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME monitor_ocr_topic_node
+)
 
 install(DIRECTORY
   launch

@@ -159,7 +159,9 @@ wrist_task_grasp_planner_node:
     require_screen_detected: false
     task_timeout_sec: 10.0
 
-    class_alias_json: '{"플랜지 너트":"flange_nut","플랜지너트":"flange_nut","기어 링":"gear_ring","기어링":"gear_ring","스페이서 링":"spacer_ring","스페이서링":"spacer_ring","육각 너트":"hex_nut","육각너트":"hex_nut","돔 너트":"dome_nut","돔너트":"dome_nut"}'
+    # 영문 canonical(management /perception/task_list: "flange nut".."dom nut") 별칭 추가.
+    # ★ management 는 "dom nut"(e 없음) 발행, detector class 는 "dome_nut" → "dom nut":"dome_nut" 브리지 필수.
+    class_alias_json: '{"플랜지 너트":"flange_nut","플랜지너트":"flange_nut","기어 링":"gear_ring","기어링":"gear_ring","스페이서 링":"spacer_ring","스페이서링":"spacer_ring","육각 너트":"hex_nut","육각너트":"hex_nut","돔 너트":"dome_nut","돔너트":"dome_nut","flange nut":"flange_nut","gear ring":"gear_ring","spacer ring":"spacer_ring","hex nut":"hex_nut","dom nut":"dome_nut","dome nut":"dome_nut"}'
 
     min_confidence: 0.0
     min_candidate_points: 20

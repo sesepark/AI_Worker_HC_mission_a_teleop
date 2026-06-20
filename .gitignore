@@ -12,3 +12,10 @@ __pycache__/
 
 # 모델 가중치 (별도 관리 — Drive/Release/LFS)
 *.pt
+
+# PaddleOCR 캐시 (첫 실행 시 자동 생성)
+paddlex_cache/
+
+# 오프라인 번들 (휠/압축)
+*.zip
+*.whl

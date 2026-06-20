@@ -70,6 +70,7 @@ RUN printf '%s\n' \
         ros-${ROS_DISTRO}-ament-cmake \
         ros-${ROS_DISTRO}-cv-bridge \
         ros-${ROS_DISTRO}-geometry-msgs \
+        ros-${ROS_DISTRO}-image-transport-plugins \
         ros-${ROS_DISTRO}-message-filters \
         ros-${ROS_DISTRO}-moveit-msgs \
         ros-${ROS_DISTRO}-pymoveit2 \

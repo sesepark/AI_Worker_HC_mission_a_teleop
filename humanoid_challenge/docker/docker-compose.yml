@@ -10,13 +10,18 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
+      - QT_QPA_PLATFORM=xcb
       - LIBGL_ALWAYS_SOFTWARE=1
       - MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+      # WSLg 네이티브 GUI (rqt/rviz)
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-30}
       - ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-0}
       - ROS_AUTOMATIC_DISCOVERY_RANGE=${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /mnt/wslg:/mnt/wslg:rw
       - ../:/ws/src/humanoid_challenge
       - ./workspace:/workspace
       - humanoid_challenge_build:/ws/build
