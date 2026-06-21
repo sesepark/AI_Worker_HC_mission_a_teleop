@@ -9,6 +9,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
 
 from pymoveit2 import MoveIt2
 from pymoveit2.moveit2 import MoveIt2State
@@ -99,6 +100,25 @@ class MoveItClient:
             callback_group=self._cb_group,
             use_move_group_action=True,
         )
+
+        # pymoveit2 subscribes to /joint_states with VOLATILE QoS by default.
+        # bringup publishes with TRANSIENT_LOCAL, which is incompatible.
+        # Override by adding subscriptions with matching QoS that feed pymoveit2's callback.
+        from sensor_msgs.msg import JointState
+        _js_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        for mv in (self._moveit_r, self._moveit_l, self._moveit_lift):
+            self._node.create_subscription(
+                JointState,
+                'joint_states',
+                mv._MoveIt2__joint_state_callback,
+                _js_qos,
+                callback_group=self._cb_group,
+            )
 
         # Per-arm locks prevent concurrent callers from corrupting shared mutable state
         # (pipeline_id, max_velocity, etc.) on the same MoveIt2 instance.

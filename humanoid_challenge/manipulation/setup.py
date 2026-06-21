@@ -12,6 +12,11 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/data',
             ['manipulation/data/object_lut.json']),
+        ('share/' + package_name + '/config', [
+            'config/zone_a.yaml',
+            'config/desk.yaml',
+            'config/poses.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -21,15 +26,15 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'test_move_to_pose = manipulation.tests.test_move_to_pose:main',
-            'move_home = manipulation.tests.move_home:main',
-            'move_to_pose = manipulation.tests.move_to_pose:main',
-            'demo_0513 = manipulation.tests.demo_0513:main',
-            'gpd_dual_view = manipulation.tests.gpd_dual_view_node:main',
-            'pc_transformer = manipulation.skill_primitives.point_cloud_transformer_node:main',
-            'demo_0520 = manipulation.tests.demo_0520:main',
-            'demo_0521 = manipulation.tests.demo_0521:main',
-            'test_gpd_open3d = manipulation.tests.test_gpd_open3d:main',
+            'test_zone_a       = manipulation.tests.test_zone_a:main',
+            'test_pick         = manipulation.tests.test_pick:main',
+
+            'test_home         = manipulation.tests.test_home:main',
+            'test_move_to_pose   = manipulation.tests.test_move_to_pose:main',
+            'test_workspace_scan = manipulation.tests.test_workspace_scan:main',
+            'test_place               = manipulation.tests.test_place:main',
+            'test_move_to_capture_pose = manipulation.tests.test_move_to_capture_pose:main',
+            'test_gripper              = manipulation.tests.test_gripper:main',
         ],
     },
 )

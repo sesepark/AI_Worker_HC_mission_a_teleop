@@ -1,0 +1,6 @@
+desk:
+  width: 1.6
+  depth: 0.8
+  height: 0.8
+  top_thickness: 0.02
+  distance_from_robot: 0.0   # 책상 앞면이 base_link에 맞닿음

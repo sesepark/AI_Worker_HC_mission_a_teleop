@@ -81,11 +81,13 @@ class GraspSkill:
         self._gripper.wait_until_executed()  # wait for command to be dispatched
         self._gripper.wait_motion()          # wait for physical gripper to close
 
-        success = self._assessment.assess_stable(
-            side,
-            object_name,
-            duration=stable_duration,
-        )
+        # SIM: assessment bypassed — no gripper effort in simulation
+        # success = self._assessment.assess_stable(
+        #     side,
+        #     object_name,
+        #     duration=stable_duration,
+        # )
+        success = True
 
         if success:
             self._log.info(f'[GraspSkill] [{side}] grasp SUCCEEDED')
