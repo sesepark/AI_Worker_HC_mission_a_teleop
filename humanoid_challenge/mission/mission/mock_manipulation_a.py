@@ -55,6 +55,7 @@ class MockManipulationA(Node):
         self._mirror = TaskList()
         self._current: str | None = None
         self._drop_due: float | None = None
+        self._pending_attach = False   # task 미러 준비 전 도착한 attach 보류
 
         self.create_timer(0.2, self._pub_manip, callback_group=cbg)
         self.create_timer(0.1, self._tick_drop, callback_group=cbg)
@@ -94,6 +95,23 @@ class MockManipulationA(Node):
     def _on_attach(self, msg: String) -> None:
         cls = self._mirror.next_target_class()
         if not cls:
+            # task_list 아직 미수신 → 버리지 말고 보류, 타이머가 미러 준비 후 처리
+            self._pending_attach = True
+            self.get_logger().warn('[mock_manip] /attach_cmd 수신 — task 미러 미준비, 보류')
+            return
+        self._do_attach(cls)
+
+    def _do_attach(self, cls: str) -> None:
+        self._current = cls
+        self.pub_attached.publish(String(data=cls))
+        self.get_logger().info(f'[mock_manip] 파지 → /attached_object={cls}')
+        if self.drop_during_move:
+            self._drop_due = self._now() + self.drop_after_attach_sec
+
+    """
+    def _on_attach(self, msg: String) -> None:
+        cls = self._mirror.next_target_class()
+        if not cls:
             self.get_logger().warn('[mock_manip] /attach_cmd 수신했으나 잔여 class 없음')
             return
         self._current = cls
@@ -101,12 +119,28 @@ class MockManipulationA(Node):
         self.get_logger().info(f'[mock_manip] 파지 → /attached_object={cls}')
         if self.drop_during_move:
             self._drop_due = self._now() + self.drop_after_attach_sec
+    """
 
+    def _tick_drop(self) -> None:
+        # 보류된 attach 재시도: 미러가 늦게 준비된 경우 여기서 처리(최대 0.1s 지연)
+        if self._pending_attach:
+            cls = self._mirror.next_target_class()
+            if cls:
+                self._pending_attach = False
+                self.get_logger().info('[mock_manip] 보류 /attach_cmd 처리')
+                self._do_attach(cls)
+        if self._drop_due is not None and self._now() >= self._drop_due:
+            self._drop_due = None
+            self.pub_attached.publish(String(data=''))   # 드롭 (적재 아님 → 미러 차감 없음)
+            self.get_logger().warn('[mock_manip] 드롭 주입 → /attached_object="" (무차감)')
+
+    """
     def _tick_drop(self) -> None:
         if self._drop_due is not None and self._now() >= self._drop_due:
             self._drop_due = None
             self.pub_attached.publish(String(data=''))   # 드롭 (적재 아님 → 미러 차감 없음)
             self.get_logger().warn('[mock_manip] 드롭 주입 → /attached_object="" (무차감)')
+    """
 
     def _on_detach(self, msg: String) -> None:
         if self._current and self._drop_due is None:
