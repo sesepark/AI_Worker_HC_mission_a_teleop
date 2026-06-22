@@ -24,7 +24,7 @@
 | ③ | 그래스프 타겟 플래닝 및 3D 좌표 전달 | ✅ 완료 | `projection_node` / `wrist_projection_node` | per-detection base_link 중심 좌표 발행 |
 | ④ | 전체 장면 포인트 클라우드 발행 | ✅ 완료 | `pointcloud_node` / `wrist_pointcloud_node` | base_link 월드 좌표 변환 후 Manipulation 전달 완료, **Slack 검증 확인** |
 | ⑤ | 탑 1 그래스프 캔디데이트 중심 좌표 발행 | ✅ 완료 | `wrist_task_grasp_planner_node` | **최대 5개 후보 → score 랭킹 → top-1 중심 3D 좌표 별도 토픽** (`/perception/wrist/target_one_pose`) |
-| ⑥ | 트레이 인식 및 판정 노드 | ✅ **구현됨 (`demo/senario_A`)** | `tray_occupancy` 패키지 (`tray_occupancy_node` + `management_node`) | 파란 트레이 검출 → bbox 내 부품 카운트(`/perception/tray_contents`) → OCR 목표와 대조해 잔여 `/perception/task_list` 발행 |
+| ⑥ | 트레이 인식 및 task list 노드 | ✅ **구현됨** | `tray_manage_node` | OCR 결과 + wrist image → typed `/perception/task_list`와 `/perception/tray_roi` 발행 |
 
 > **객체별 정제 PCD**(`grasp_pcd_node` / `wrist_grasp_pcd_node`)는 팀 기능 뷰에서 ④(PCD 생성·전달)에 포함.
 > 레포에는 head/wrist 분리 + 정제 PCD 노드가 따로 있어 정적 분석 기준 노드 수가 9개로 더 많다.
@@ -33,7 +33,7 @@
 - detector confidence 실측: **wrist 단독 0.75~0.80 / head 0.8 이상** — 미션 임계값 설정 시 wrist는 0.75 근처로 낮게 잡아야 누락 없음.
 - head ↔ wrist **동일 개체 대응(cross-camera)** 완료 → planner `cross camera` score 항(0.03)이 실제 동작.
 - PCD가 이미 **base_link 월드 좌표로 변환되어 Manipulation에 전달·Slack 검증 완료** → GPD 입력은 좌표 변환 불필요, 토픽명만 정정하면 됨.
-- ⑥ 트레이 판정 노드 **완성** → `mission_a` `VERIFY`/A1_MONITOR가 **`/perception/task_list`(잔여)** 를 구독하면 OCR 파싱·자체 차감 로직 불필요. 트레이 비전으로 자동 검증됨. (§11 참고)
+- ⑥ 트레이/task list 노드 **완성** → `mission_a` `VERIFY`/A1_MONITOR가 **`/perception/task_list`(`GetTaskList_Response`)** 를 구독해 공용 typed task list를 사용. (§11 참고)
 
 ---
 
@@ -124,8 +124,7 @@ cp ~/Downloads/tray_occupancy_best.pt  $PERC/perception/model/tray_occupancy_bes
 | ★ `wrist_pointcloud_node` | `perception` | wrist 전체 mask PointCloud2 | ✅ 로봇 검증 (Manipulation 전달·Slack 확인) |
 | ★ `wrist_grasp_pcd_node` | `perception` | wrist 객체별 정제 PCD (GPD 입력 후보) | ✅ 로봇 검증 |
 | ★ `wrist_task_grasp_planner_node` | `perception` | task list 반영 최종 target 1개 (최대 5후보→top-1) | ✅ 로봇 검증 — `wrist_task_grasp_planner.launch.py params_file:=...` 로 실행 |
-| `tray_occupancy_node` | `tray_occupancy` | 파란 트레이 검출 + bbox 내 부품 카운트 → `/perception/tray_contents` | ✅ 구현 (`demo/senario_A`) |
-| `management_node` | `tray_occupancy` | OCR 목표 − 트레이 관측 = 잔여 → `/perception/task_list` | ✅ 구현 (`demo/senario_A`) |
+| `tray_manage_node` | `perception` | OCR 결과 + wrist image → `/perception/task_list`, `/perception/tray_roi` | ✅ 구현 |
 
 **내부 파이프라인**
 ```
@@ -572,54 +571,46 @@ ros2 launch perception tray_occupancy.launch.py \
 **Publish**
 | 토픽 | 타입 | 설명 |
 |------|------|------|
-| `/perception/tray_contents` | `std_msgs/String`(JSON) | 트레이 bbox 안에 들어온 부품들의 안정화 카운트 |
+| `/perception/tray_roi` | `sensor_msgs/RegionOfInterest` | 최신 tray bbox |
 
-**`/perception/tray_contents` JSON**
-```json
-{ "parts": [{"name": "hex nut", "count": 2}],
-  "trays": [{"class_name": "blue_tray", ...}],
-  "stable_frames": 3 }
-```
-- 별도 트레이 YOLO 모델(`tray_model_path`)로 파란 트레이 bbox 검출 → `/detections` 부품 중
-  트레이 bbox 안(+`bbox_margin_px`)에 있는 것만 카운트. `tray_min_hits`/`stable_frames` 로 안정화.
-- ⚠️ `name` 은 **canonical 표기**(공백): `flange nut / gear ring / spacer ring / hex nut / **dom nut**`
-  (detector class_name `flange_nut`/`dome_nut` 와 다름 — `name_utils.canonical_part_name` 가 변환).
+트레이 YOLO 모델(`tray_model_path`)로 파란 트레이 bbox를 검출하고 안정화된 최신 ROI를 발행한다.
 
-#### 11. `management_node` — OCR 목표 − 트레이 관측 = 잔여
+#### 11. `tray_manage_node` — OCR task list + tray ROI
 
 **Subscribe**
 | 토픽 | 타입 |
 |------|------|
 | `/monitor_ocr/result` | `String`(JSON) — OCR 목표 수량 |
-| `/perception/tray_contents` | `String`(JSON) — 현재 트레이 내 수량 |
+| wrist image topic | `sensor_msgs/Image` — tray YOLO 입력 |
 
 **Publish**
 | 토픽 | 타입 | 설명 |
 |------|------|------|
-| **`/perception/task_list`** | `std_msgs/String`(JSON) | **잔여 = max(OCR목표 − 트레이관측, 0)** |
+| **`/perception/task_list`** | `mission_interfaces/srv/GetTaskList_Response` | typed task list state |
 
-**`/perception/task_list` JSON**
-```json
-{ "parts": [
-    {"name": "flange nut", "count": 1},
-    {"name": "gear ring",  "count": 0},
-    {"name": "spacer ring","count": 0},
-    {"name": "hex nut",    "count": 2},
-    {"name": "dom nut",    "count": 0} ],
-  "ocr_frames_used": 10,
-  "ocr_latest_screen_detected": true,
-  "tray_stable_frames": 3 }
+**`/perception/task_list` message**
+```yaml
+success: false
+message: '{"ocr_topic":"/monitor_ocr/result","timeout_sec":30.0,"frame_count":10}'
+screen_detected: true
+all_counts_recognized: true
+frames_used: 10
+parts:
+  - {name: "flange nut", count: 1}
+  - {name: "gear ring", count: 0}
+  - {name: "spacer ring", count: 0}
+  - {name: "hex nut", count: 2}
+  - {name: "dom nut", count: 0}
 ```
 - `require_complete_ocr=true` 면 OCR 에 5종이 다 안 잡힌 프레임은 무시(이전 목표 유지) → 안정적.
-- 트레이가 비어도 발행(`publish_on_empty_tray=true`) → 초기 목표 그대로 노출.
+- `/perception/get_task_list` service도 같은 response 계약을 반환한다.
 
 **미션 A 영향 (중요)**
-- `mission_a` 는 OCR 파싱·한국어 매핑·자체 차감을 **할 필요 없음**. `/perception/task_list` 한 토픽으로:
+- `mission_a` 는 OCR 파싱·한국어 매핑을 직접 할 필요 없이 `/perception/task_list` 한 토픽으로:
   - A1_MONITOR: 첫 `/perception/task_list` 수신 → 목표 확정
-  - VERIFY: 최신 `/perception/task_list` 의 `total==0` 이면 DONE, 아니면 A2_SCAN 복귀 (트레이 비전이 차감 검증)
+  - VERIFY: 최신 `/perception/task_list` 의 `total==0` 이면 DONE, 아니면 A2_SCAN 복귀
 - 단 canonical `name`(공백 표기) ↔ detector class_name 변환 테이블 필요 (`mission/task_list.py` 에 추가).
-- place pose(A3_PLACE)용 트레이 3D 위치/적재영역은 아직 `/perception/tray_contents` 에 2D 정보뿐 —
-  base_link 기준 place 좌표는 별도 협의 필요(트레이 PCD/centroid).
+- place pose(A3_PLACE)용 트레이 3D 위치/적재영역은 아직 별도 협의 필요(트레이 PCD/centroid).
 
 ---
 
@@ -841,8 +832,8 @@ translation ≈ [-9.7e-06, 1.0e-05, 1.0e-05]   # 거의 0
 |------|------|------|------|
 | `mission_a.py` 구독 토픽 정정 (`/target_pose` → `/perception/wrist/target_one_pose`) | System | 5.31 | ✅ (2026-05-30 적용) |
 | Manipulation GPD 입력 토픽 정정 (`/camera_right/points_base` → `/perception/wrist/mask_cloud` 또는 `/perception/wrist/target_pcd/<class>`) | Manipulation | 5.31 | ⬜ |
-| `tray_occupancy` 발행 `/perception/task_list` mission_a 연동 (VERIFY/A1) | System | 6.1 | 🔄 (코드 반영 중) |
-| 트레이 base_link place 좌표(A3_PLACE용) 인터페이스 협의 — 현재 `/perception/tray_contents` 는 2D 카운트만 | Perception+Manipulation | 6.1 | ⬜ |
+| `tray_manage_node` 발행 `/perception/task_list` mission_a 연동 (VERIFY/A1) | System | 6.1 | ✅ |
+| 트레이 base_link place 좌표(A3_PLACE용) 인터페이스 협의 — 현재 `/perception/tray_roi` 는 2D bbox | Perception+Manipulation | 6.1 | ⬜ |
 | 트레이 YOLO 모델 `tray_occupancy_best.pt` 배치 ([Drive](https://drive.google.com/drive/folders/1MzRzf27wtmPqp8-KqR9iH_AnrLsgaPOU?usp=sharing)) → `perception/model/tray_occupancy_best.pt` | System | 6.1 | ✅ (2026-06-01 배치·로드 검증) |
 | TF tree `camera_right_color_optical_frame → base_link` 확인 / launch 등록 | Perception | 이번 주 | 🔄 |
 | `monitor_ocr_node` YOLO 전환 + 실모니터 검증 | Perception | 이번 주 | 🔄 |

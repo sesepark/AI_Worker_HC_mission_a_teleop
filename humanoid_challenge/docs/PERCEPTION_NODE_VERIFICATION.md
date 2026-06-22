@@ -200,7 +200,7 @@ ros2 topic info /perception/head/mask_cloud | grep "Publisher count"
 ### ⑤ wrist_task_grasp_planner_node (※ wrist TF 브리지 필요 — STEP 2.5-B)
 
 wrist detector + RealSense depth + base_link TF(브리지)가 전제. `/perception/task_list`는
-management_node가 없으므로 fake로 주입해 검증한다.
+typed `GetTaskList_Response` 메시지를 fake로 주입해 검증할 수 있다.
 
 ```bash
 ros2 launch perception part_detector.launch.py camera_name:=wrist_right \
@@ -211,8 +211,8 @@ ros2 launch perception wrist_task_grasp_planner.launch.py
 다른 터미널에서 가짜 task_list 주입:
 
 ```bash
-ros2 topic pub /perception/task_list std_msgs/msg/String \
-  "{data: '{\"parts\":[{\"name\":\"gear ring\",\"count\":2}]}'}" -r 1
+ros2 topic pub /perception/task_list mission_interfaces/srv/GetTaskList_Response \
+  "{success: false, message: '{\"ocr_topic\":\"manual\",\"timeout_sec\":30.0,\"frame_count\":1}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'gear ring', count: 2}]}" -r 1
 
 ros2 topic echo /perception/wrist/target_one_pose
 ```

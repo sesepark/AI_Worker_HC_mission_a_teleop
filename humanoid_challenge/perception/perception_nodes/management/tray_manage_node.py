@@ -28,7 +28,6 @@ class TrayManageNode(Node):
         self.declare_parameter("image_topic", "/camera_right/camera_right/color/image_rect_raw")
         self.declare_parameter("ocr_result_topic", "/monitor_ocr/result")
         self.declare_parameter("task_list_topic", "/perception/task_list")
-        self.declare_parameter("task_list_response_topic", "/perception/task_list_response")
         self.declare_parameter("task_list_service_name", "/perception/get_task_list")
         self.declare_parameter("tray_roi_topic", "/perception/tray_roi")
         self.declare_parameter("tray_model_path", self.default_model_path())
@@ -45,8 +44,6 @@ class TrayManageNode(Node):
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.ocr_result_topic = str(self.get_parameter("ocr_result_topic").value)
         self.task_list_topic = str(self.get_parameter("task_list_topic").value)
-        self.task_list_response_topic = str(
-            self.get_parameter("task_list_response_topic").value)
         self.task_list_service_name = str(
             self.get_parameter("task_list_service_name").value)
         self.tray_roi_topic = str(self.get_parameter("tray_roi_topic").value)
@@ -77,10 +74,9 @@ class TrayManageNode(Node):
         self.bridge = CvBridge()
         self.tray_model = YOLO(tray_model_path)
 
-        self.pub_task = self.create_publisher(String, self.task_list_topic, 10)
-        self.pub_task_response = self.create_publisher(
+        self.pub_task = self.create_publisher(
             GetTaskList.Response,
-            self.task_list_response_topic,
+            self.task_list_topic,
             10,
         )
         self.pub_tray_roi = self.create_publisher(RegionOfInterest, self.tray_roi_topic, 10)
@@ -105,7 +101,6 @@ class TrayManageNode(Node):
             "TrayManageNode ready. "
             f"image_topic={self.image_topic}, ocr_result_topic={self.ocr_result_topic}, "
             f"task_list_topic={self.task_list_topic}, "
-            f"task_list_response_topic={self.task_list_response_topic}, "
             f"task_list_service={self.task_list_service_name}, "
             f"tray_roi_topic={self.tray_roi_topic}"
         )
@@ -233,11 +228,7 @@ class TrayManageNode(Node):
 
         payload = self.make_task_list_payload()
         self.last_task_list_payload = payload
-
-        out = String()
-        out.data = json.dumps(payload, ensure_ascii=False)
-        self.pub_task.publish(out)
-        self.pub_task_response.publish(self.task_list_response_from_payload(payload))
+        self.pub_task.publish(self.task_list_response_from_payload(payload))
 
     def make_task_list_payload(self) -> dict:
         parts = [

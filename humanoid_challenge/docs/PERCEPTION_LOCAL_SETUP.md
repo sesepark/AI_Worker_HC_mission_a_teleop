@@ -448,14 +448,14 @@ ros2 run rqt_image_view rqt_image_view    # 좌상단 dropdown → /detector_deb
 
 ### A-6. tray_occupancy — 트레이 검출 + 잔여 task list (신규 `demo/senario_A`)
 ```bash
-# detector(head) 가 /detections 를 발행 중이어야 함. 트레이 YOLO 모델 별도 필요.
-ros2 launch tray_occupancy tray_occupancy.launch.py \
-  tray_model_path:=/ws/src/tray_occupancy/weights/tray_best.pt
+# OCR 결과와 wrist image가 준비되어 있어야 함. 트레이 YOLO 모델 별도 필요.
+ros2 launch perception task_management.launch.py \
+  tray_model_path:=/ws/src/humanoid_challenge/perception/model/tray_occupancy_best.pt
 # 확인
-ros2 topic echo --once /perception/tray_contents   # 트레이 내 부품 카운트
-ros2 topic echo --once /perception/task_list       # 잔여(OCR목표-트레이관측)
+ros2 topic echo --once /perception/tray_roi        # 최신 tray bbox
+ros2 topic echo --once /perception/task_list       # GetTaskList_Response typed task list
 ```
-- `tray_occupancy_node` 는 yolo_venv, `management_node` 는 시스템 python — launch가 자동 분기.
+- `tray_manage_node` 는 yolo_venv prefix로 실행된다.
 
 > **💡 launch `prefix=` 가 venv shebang 문제(함정 ①)를 해결**: 신규 launch들(`monitor_ocr.launch.py`,
 > `tray_occupancy.launch.py`)은 `prefix="/ws/ocr_venv/bin/python3"` 처럼 venv python을 직접 지정해

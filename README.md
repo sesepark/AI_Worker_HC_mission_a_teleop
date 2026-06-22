@@ -54,8 +54,7 @@ AI_Worker_HC/
   - `/monitor_ocr/result` (`std_msgs/String`, OCR JSON)
   - `/camera_right/camera_right/color/image_rect_raw` (`sensor_msgs/Image`, tray YOLO 입력)
 - 출력:
-  - `/perception/task_list` (`std_msgs/String`, canonical part count JSON)
-  - `/perception/task_list_response` (`mission_interfaces/srv/GetTaskList_Response`, typed task list state)
+  - `/perception/task_list` (`mission_interfaces/srv/GetTaskList_Response`, typed task list state)
   - `/perception/get_task_list` (`mission_interfaces/srv/GetTaskList`, latest task list service)
   - `/perception/tray_roi` (`sensor_msgs/RegionOfInterest`, 최신 tray bbox)
 - `GetTaskList` 변환 규칙:
@@ -66,7 +65,8 @@ AI_Worker_HC/
   - `parts` -> `mission_interfaces/TaskItem[] parts`
   - `timeout_sec`는 `30.0`으로 고정해 `message`의 source JSON에 포함한다.
   - `frame_count`는 `/monitor_ocr/result`의 `frames_used` 값을 사용해 `message`의 source JSON에 포함한다.
-- `/perception/task_list` String JSON은 기존 `mission_a` 구독 호환을 위해 유지한다. `GetTaskList` service 이름은 기본적으로 `/perception/get_task_list`이며, System FSM의 service fallback에 직접 연결하려면 `task_list_service_name:=/mission_a/task_list`로 override할 수 있다.
+- 기존 String JSON `/perception/task_list`는 제거했고, `/perception/task_list`는 typed `GetTaskList_Response` topic으로 발행한다.
+- `GetTaskList` service 이름은 기본적으로 `/perception/get_task_list`이며, System FSM의 service fallback에 직접 연결하려면 `task_list_service_name:=/mission_a/task_list`로 override할 수 있다.
 - `mission_a`의 service fallback은 이 매핑을 반영해, `success=false`라도 `parts`가 있으면 task list를 반영한다. 여기서 `success`는 RPC 성공 여부가 아니라 `mission_complete` 상태다.
 - 모델 기본 경로:
   - `humanoid_challenge/perception/model/tray_occupancy_best.pt`
@@ -84,7 +84,7 @@ AI_Worker_HC/
 - 입력:
   - `/detections` (`perception/msg/PartDetectionArray`)
   - wrist RGB-D image/camera_info
-  - `/perception/task_list`
+  - `/perception/task_list` (`mission_interfaces/srv/GetTaskList_Response`)
 - 출력:
   - `/perception/wrist/target_one_pose` (`geometry_msgs/PoseStamped`, base_link 기준 최종 target)
   - `/perception/wrist/target_one_detection` (`std_msgs/String`, 선택된 detection/bbox/score JSON)
@@ -99,10 +99,10 @@ AI_Worker_HC/
 - `wrist_projection_node`, `wrist_pointcloud_node`, `wrist_grasp_pcd_node`와 각 개별 launch는 유지한다. 필요 시 기존 projection/pointcloud/PCD 디버깅용으로 단독 실행할 수 있다.
 
 #### System 팀 영향
-- `mission_a`가 이미 구독하는 핵심 계약은 유지된다.
+- `mission_a`가 구독하는 task input 이름은 유지하되, 타입은 `std_msgs/String` JSON에서 `mission_interfaces/srv/GetTaskList_Response`로 변경했다.
   - task input: `/perception/task_list`
   - pick target: `/perception/wrist/target_one_pose`
-- 따라서 System 쪽 FSM은 새 perception 브랜치를 받아도 topic 이름 변경 없이 동작한다.
+- 따라서 System 쪽 FSM은 topic 이름은 그대로 쓰되, subscriber 타입만 `GetTaskList.Response` 계약에 맞추면 된다.
 - 변경된 것은 `/perception/task_list`를 만드는 내부 구현이다. 예전 `tray_contents_node + management_node` 조합 대신 `tray_manage_node`가 OCR 결과와 tray image를 받아 task list를 직접 발행한다.
 - `use_task_list_service` 기반 OCR 서비스 fallback 코드는 남아 있으므로, topic pipeline이 준비되지 않은 상황에서도 기존 서비스 테스트 경로를 막지 않는다.
 

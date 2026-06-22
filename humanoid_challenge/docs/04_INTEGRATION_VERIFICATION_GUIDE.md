@@ -15,13 +15,13 @@
 | # | 경로 | 신규/수정 | 변경요지 | 근거 |
 |---|---|---|---|---|
 | 1 | `perception/perception_nodes/name_utils.py` | 신규 | `CANONICAL_PARTS`=`["flange nut","gear ring","spacer ring","hex nut","dom nut"]`, `canonical_part_name` 등 | `name_utils.py:6-12,61-67` |
-| 2 | `perception/perception_nodes/management/management_node.py` (+`__init__.py`) | 신규 | 데모 이식, import만 `perception_nodes.name_utils`. `/monitor_ocr/result`+`/perception/tray_contents`→`/perception/task_list` | `management_node.py:12,36-38` |
-| 3 | `perception/perception_nodes/tray_occupancy/tray_contents_node.py` | 신규 | 데모 연속발행 로직. `perception.msg`/`perception_nodes.name_utils`, 모델기본값 `perception/model/tray_occupancy_best.pt`, 노드명 `tray_contents_node` | `tray_contents_node.py:17-18,24,59,66,114` |
+| 2 | `perception/perception_nodes/management/tray_manage_node.py` | 신규 | `/monitor_ocr/result`와 wrist image를 받아 `/perception/task_list`(`GetTaskList_Response`)와 `/perception/tray_roi` 발행 | `tray_manage_node.py` |
+| 3 | `perception/perception_nodes/tray_occupancy/*`, legacy `management_node.py` | 삭제 | 예전 String JSON task list 발행 경로 제거. 중복 발행/타입 충돌 방지 | git history |
 | 4 | `perception/perception_nodes/monitor_ocr/monitor_ocr_topic_node.py` | 신규 | 공용 OCR 파이프라인 재사용해 `/monitor_ocr/result` 발행 (서비스 노드 무수정) | `monitor_ocr_topic_node.py:35-41,83` |
-| 5 | `perception/CMakeLists.txt` | 수정 | 3개 신규 노드 `install(PROGRAMS … RENAME …)` | `CMakeLists.txt:71-90` |
-| 6 | `perception/launch/task_management.launch.py` | 신규 | `tray_contents_node`(prefix `/ws/yolo_venv`)+`management_node` | `task_management.launch.py:44-46,89` |
+| 5 | `perception/CMakeLists.txt` | 수정 | `tray_manage_node`, `monitor_ocr_topic_node`, wrist planner 설치 | `CMakeLists.txt` |
+| 6 | `perception/launch/task_management.launch.py` | 신규 | `tray_manage_node` launch. `task_list_topic=/perception/task_list`, `task_list_service_name=/perception/get_task_list` | `task_management.launch.py` |
 | 7 | `mission/mission/task_list.py` | 수정 | 영문 canonical 키 추가(★`domnut→dome_nut`) | `task_list.py:14-31` |
-| 8 | `mission/mission/mission_a.py` | 수정 | `/perception/task_list` 구독+`_on_task_list`, A1 토픽구동, `use_task_list_service` 가드, VERIFY 하이브리드 | `mission_a.py` (아래 D 참조) |
+| 8 | `mission/mission/mission_a.py` | 수정 | `/perception/task_list`를 `GetTaskList_Response`로 구독, A1 토픽구동, `use_task_list_service` 가드, VERIFY 하이브리드 | `mission_a.py` (아래 D 참조) |
 | 9 | `perception/config/wrist_projection/params.yaml` | 수정 | `class_alias_json`에 영문 별칭 추가(★`"dom nut":"dome_nut"`), 한국어 보존 | `params.yaml:162-164` |
 | 10 | `docker/Dockerfile.amd64` | 수정 | `ros-${ROS_DISTRO}-image-transport-plugins` | `Dockerfile.amd64:73` |
 | 11 | `docker/docker-compose.yml` | 수정 | WSLg env(`WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`/`QT_QPA_PLATFORM=xcb`)+`/mnt/wslg` 마운트 | `docker-compose.yml:13,17-18,24` |
@@ -39,14 +39,12 @@
    ├─► detector_node ─► /detections (PartDetectionArray)
    │                          │
  /monitor_ocr/result ◄── monitor_ocr_topic_node(실) │  또는  fake OCR(topic pub)
-   │                          ▼
-   │                   tray_contents_node ─► /perception/tray_contents (String JSON)
-   │                          │
-   ▼                          ▼
- management_node ◄────────────┘   (remaining = ocr − tray)
    │
    ▼
- /perception/task_list (String JSON, canonical 영문 "flange nut".."dom nut")
+ tray_manage_node   (OCR 목표 + tray ROI 관리)
+   │
+   ▼
+ /perception/task_list (mission_interfaces/srv/GetTaskList_Response)
    │                                   │
    ├─► wrist_task_grasp_planner_node ──┤  (task_topic 구독)
    │        │                          │
@@ -56,8 +54,7 @@
    └─► mission_a (_on_task_list 구독 → A1_MONITOR → A2_SCAN …)
 ```
 
-- `management_node` 구독 `/monitor_ocr/result`,`/perception/tray_contents` → 발행 `/perception/task_list` (`management_node.py:36-38`).
-- `tray_contents_node` 발행 `/perception/tray_contents`, 구독 `/detections`+image (`tray_contents_node.py:114-122`).
+- `tray_manage_node` 구독 `/monitor_ocr/result`, wrist image → 발행 `/perception/task_list` (`GetTaskList_Response`)와 `/perception/tray_roi`.
 - `monitor_ocr_topic_node` 발행 `/monitor_ocr/result` (`monitor_ocr_topic_node.py:83`).
 - 기존 서비스: `monitor_ocr_node` srv `/mission_a/task_list` (`monitor_ocr_node.py:46,90-95`), `tray_occupancy_node` srv `/mission_a/tray_detections` (`tray_occupancy_node.py:67,129-134`) — **삭제하지 않고 유지**.
 - 출력계약 `/perception/wrist/target_one_pose` (PoseStamped, `base_link`) — wrist planner 무수정 (`wrist_task_grasp_planner_node.py:66,968`).
@@ -89,7 +86,7 @@ cd ~/AI_Worker_HC/humanoid_challenge
 - 환경 사실(확정·재구성 금지): `yolo_venv`/`ocr_venv` 분리·`--system-site-packages`·`numpy<2`·`COLCON_IGNORE`. 노드 shebang/launch prefix는 `/ws/yolo_venv`·`/ws/ocr_venv` 경로에 의존.
 - **각 추가 터미널**에서 빌드 후에는 `source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash`를 먼저 실행한다.
 
-> 범주 1·1-2는 모델 `.pt`·venv·카메라 없이 동작한다(management_node·mission_a는 순수 `rclpy`/`std_msgs`). 모델·카메라가 필요한 노드(detector/tray_contents/monitor_ocr_topic 실행)는 범주 2에서 다룬다.
+> 범주 1·1-2는 mock OCR과 typed task topic 중심으로 동작한다. 모델·카메라가 필요한 노드(detector/tray_manage_node/monitor_ocr_topic 실행)는 범주 2에서 다룬다.
 
 ---
 
@@ -116,42 +113,40 @@ cd ~/AI_Worker_HC/humanoid_challenge
   ```bash
   ros2 pkg executables perception
   ```
-- **확인**: 아래 13개가 모두 보여야 하며, **신규 3개**가 포함:
+- **확인**: 아래 실행파일이 보여야 하며, 통합 task path의 핵심은 `tray_manage_node`, `monitor_ocr_topic_node`, `wrist_task_grasp_planner_node`다.
   ```
   perception detector_node
-  perception management_node            ← 신규
   perception monitor_ocr_node
-  perception monitor_ocr_topic_node     ← 신규
-  perception tray_contents_node         ← 신규
-  perception tray_occupancy_node
+  perception monitor_ocr_topic_node
+  perception tray_manage_node
   perception wrist_task_grasp_planner_node
   perception head_projection_node / head_pointcloud_node / head_grasp_pcd_node
   perception wrist_projection_node / wrist_pointcloud_node / wrist_grasp_pcd_node
   ```
-- **의미**: `CMakeLists.txt:71-90`의 `install(PROGRAMS … RENAME …)`가 정상 설치됨 = 신규 노드가 `ros2 run perception <노드>`로 호출 가능. 기존 서비스 노드(`monitor_ocr_node`,`tray_occupancy_node`)도 그대로 병행 노출.
-- **실제 사용**: launch 파일들이 `executable='management_node'` 등 이 이름으로 노드를 띄운다 (`task_management.launch.py:44,89`).
+- **의미**: `CMakeLists.txt`의 `install(PROGRAMS … RENAME …)`가 정상 설치됨 = 노드가 `ros2 run perception <노드>`로 호출 가능. OCR 서비스 노드(`monitor_ocr_node`)도 병행 노출된다.
+- **실제 사용**: launch 파일들이 `executable='tray_manage_node'` 등 이 이름으로 노드를 띄운다.
 
-### C-2. management_node 기동 (터미널 2)
+### C-2. tray_manage_node 기동 (터미널 2)
 
 - **명령**
   ```bash
   source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash
-  ros2 run perception management_node
+  ros2 launch perception task_management.launch.py mock_monitor_ocr:=true
   ```
-- **확인**: `ManagementNode ready. ocr_result_topic=/monitor_ocr/result, tray_contents_topic=/perception/tray_contents, task_list_topic=/perception/task_list` 로그.
-- **의미**: 신규 management_node가 정상 기동, 구독/발행 토픽이 `management_node.py:19-21,40-43`대로 설정됨.
-- **실제 사용**: 실파이프라인에서는 `ros2 launch perception task_management.launch.py`로 tray_contents_node와 함께 기동된다.
+- **확인**: `TrayManageNode ready. ... task_list_topic=/perception/task_list ... task_list_service=/perception/get_task_list` 로그.
+- **의미**: `tray_manage_node`가 정상 기동하고 `/perception/task_list`를 `mission_interfaces/srv/GetTaskList_Response` 타입으로 발행한다.
+- **실제 사용**: 실파이프라인에서도 `ros2 launch perception task_management.launch.py`로 기동한다.
 
 ### C-3. fake OCR 발행 (터미널 3)
 
-- **명령** (★부품 5종 전부 포함 — `require_complete_ocr=True`라 누락 시 무시됨, `management_node.py:23,49-56`)
+- **명령** (★부품 5종 전부 포함 — `require_complete_ocr=True`라 누락 시 무시됨)
   ```bash
   source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash
   ros2 topic pub /monitor_ocr/result std_msgs/msg/String \
   "{data: '{\"frames_used\":10,\"parts\":[{\"name\":\"플랜지 너트\",\"count\":1},{\"name\":\"기어 링\",\"count\":2},{\"name\":\"스페이서 링\",\"count\":1},{\"name\":\"육각 너트\",\"count\":4},{\"name\":\"돔 너트\",\"count\":2}],\"latest_screen_detected\":true}'}" -r 1
   ```
-- **확인**: 터미널 3에 `publishing #N` 반복 출력. 터미널 2(management) 경고(`Invalid OCR JSON`/`Incomplete OCR result ignored`)가 **없어야** 정상.
-- **의미**: management가 한국어 부품명을 `canonical_part_name`으로 정규화(`management_node.py:80`, `name_utils.py:61-67`)해 수용. (한국어 "돔 너트" → canonical "dom nut")
+- **확인**: 터미널 3에 `publishing #N` 반복 출력. 터미널 2(tray_manage_node) 경고(`Invalid OCR JSON`/`Incomplete OCR result ignored`)가 **없어야** 정상.
+- **의미**: tray_manage_node가 한국어 부품명을 `canonical_part_name`으로 정규화해 수용. (한국어 "돔 너트" → canonical "dom nut")
 - **실제 사용**: 실환경에서는 이 토픽을 `monitor_ocr_topic_node`(실 OCR, 범주 2)가 채운다 — fake와 **동일 토픽/형상**.
 
 ### C-4. /perception/task_list 출력 확인 (터미널 4)
@@ -161,36 +156,42 @@ cd ~/AI_Worker_HC/humanoid_challenge
   source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash
   ros2 topic echo --once /perception/task_list
   ```
-- **확인**: 다음 형상의 JSON String:
+- **확인**: 다음 형상의 typed message:
+  ```yaml
+  success: false
+  message: '{"ocr_topic":"/monitor_ocr/result","mock_monitor_ocr":false,"timeout_sec":30.0,"frame_count":10}'
+  screen_detected: true
+  all_counts_recognized: true
+  frames_used: 10
+  parts:
+  - name: flange nut
+    count: 1
+  - name: gear ring
+    count: 2
   ```
-  data: '{"parts": [{"name": "flange nut", "count": 1}, {"name": "gear ring", "count": 2},
-          {"name": "spacer ring", "count": 1}, {"name": "hex nut", "count": 4},
-          {"name": "dom nut", "count": 2}], "source": {...}, "ocr_frames_used": 10, ...}'
-  ```
-- **의미**: ① management 토픽 발행 **복원** 확인, ② canonical **영문** 이름으로 정규화, ③ `remaining = ocr − tray` 계산(`management_node.py:100-105`). tray 입력이 없어도 `publish_on_empty_tray=True`(`management_node.py:22,97`)로 `remaining=ocr`.
+- **의미**: ① tray_manage_node 토픽 발행 확인, ② canonical **영문** 이름으로 정규화, ③ `/perception/task_list` 타입이 `mission_interfaces/srv/GetTaskList_Response`임을 확인.
 - **실제 사용**: 이 토픽이 wrist planner(`task_topic`)와 mission_a(`_on_task_list`)의 입력. 다운스트림이 그대로 소비.
 
-### C-5. (선택) fake tray로 차감 확인 (터미널 5)
+### C-5. (선택) GetTaskList 서비스 확인 (터미널 5)
 
-- **명령** (트레이에 flange nut 1개가 적재됐다고 가정 → 잔량 1−1=0)
+- **명령**
   ```bash
   source /opt/ros/jazzy/setup.bash && source /ws/install/setup.bash
-  ros2 topic pub /perception/tray_contents std_msgs/msg/String \
-  "{data: '{\"parts\":[{\"name\":\"flange nut\",\"count\":1}],\"tray_count\":1,\"tray_detections\":[]}'}" -r 1
+  ros2 service call /perception/get_task_list mission_interfaces/srv/GetTaskList \
+  "{timeout_sec: 30.0, frame_count: 10}"
   ```
-- **확인**: 터미널 4의 `/perception/task_list`에서 `flange nut`의 `count`가 `1`→`0`으로 줄어든다.
-- **의미**: management의 `remaining = max(ocr − tray, 0)` 차감 로직(`management_node.py:100-105`)이 실제로 동작.
-- **실제 사용**: 실환경에서는 `tray_contents_node`(범주 2)가 트레이 YOLO로 이 토픽을 채워 적재 진행분을 차감.
+- **확인**: `/perception/task_list`와 같은 `parts`, `frames_used`, `success` 의미가 응답된다.
+- **의미**: topic consumer와 service fallback consumer가 같은 typed task list 계약을 공유한다.
+- **실제 사용**: System FSM이 특정 시점에 task list를 요청해야 할 때 service fallback으로 사용할 수 있다.
 
 ### C-6. 토픽 연결(파이프라인 배선) 확인 (터미널 4/5)
 
 - **명령**
   ```bash
   ros2 topic info /monitor_ocr/result
-  ros2 topic info /perception/tray_contents
   ros2 topic info /perception/task_list
   ```
-- **확인**: `/monitor_ocr/result` → Publisher(fake/실), Subscriber ≥1(management). `/perception/task_list` → Publisher 1(management), Subscriber 수(echo/planner/mission_a 실행 시 증가). 타입 모두 `std_msgs/msg/String`.
+- **확인**: `/monitor_ocr/result` → Publisher(fake/실), Subscriber ≥1(tray_manage_node). `/perception/task_list` → Publisher 1(tray_manage_node), Subscriber 수(echo/planner/mission_a 실행 시 증가). `/perception/task_list` 타입은 `mission_interfaces/srv/GetTaskList_Response`.
 - **의미**: 토픽명·타입·발행/구독 연결이 통합 설계대로 배선됨.
 - **실제 사용**: 노드 누락/오타로 파이프라인이 끊기지 않았는지 빠르게 진단하는 표준 방법.
 
@@ -234,11 +235,11 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
   ros2 topic pub /manipulator_state std_msgs/msg/String "{data: 'IDLE'}" -r 2
   ```
 - **명령** (터미널 4 — task_list 입력) — 두 방식 중 택1:
-  - (a) **풀 체인**: (C)의 management_node + fake OCR를 그대로 켜 두면 `/perception/task_list`가 자동 채워진다(권장, 통합 전체 경로 확인).
+  - (a) **풀 체인**: (C)의 tray_manage_node + fake OCR를 그대로 켜 두면 `/perception/task_list`가 자동 채워진다(권장, 통합 전체 경로 확인).
   - (b) **단축**: task_list를 직접 발행
     ```bash
-    ros2 topic pub /perception/task_list std_msgs/msg/String \
-    "{data: '{\"parts\":[{\"name\":\"flange nut\",\"count\":1},{\"name\":\"gear ring\",\"count\":2},{\"name\":\"spacer ring\",\"count\":1},{\"name\":\"hex nut\",\"count\":4},{\"name\":\"dom nut\",\"count\":2}]}'}" -r 1
+    ros2 topic pub /perception/task_list mission_interfaces/srv/GetTaskList_Response \
+    "{success: false, message: '{\"ocr_topic\":\"manual\",\"timeout_sec\":30.0,\"frame_count\":1}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'flange nut', count: 1}, {name: 'gear ring', count: 2}, {name: 'spacer ring', count: 1}, {name: 'hex nut', count: 4}, {name: 'dom nut', count: 2}]}" -r 1
     ```
 - **확인**(터미널 2 mission_a 로그, 순서대로):
   ```
@@ -248,7 +249,7 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
   [state] A1_MONITOR -> A2_SCAN
   ```
 - **의미**: ① mission_a가 서비스 호출 없이 **토픽 구독**으로 task_list 구성, ② **영문 canonical + dom→dome 매핑**이 동작(로그에 `dome_nut:2` 존재 = `'dom nut'`→`'domnut'`→`dome_nut`, `task_list.py:14-31`), ③ `total_remaining>0` → `A1→A2` 전이.
-- **실제 사용**: 실환경에서는 management_node가 `/perception/task_list`를 채우고 mission_a가 같은 방식으로 소비.
+- **실제 사용**: 실환경에서는 tray_manage_node가 `/perception/task_list`를 채우고 mission_a가 같은 방식으로 소비.
 
 ### D-3. 이후 상태(예상되는 정지점)
 
@@ -279,7 +280,7 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
   cp /tmp/tray_model/best.pt tray_occupancy_best.pt        # ★ best.pt → tray_occupancy_best.pt 리네임
   ```
 - **확인**: 컨테이너에서 `ls /ws/src/humanoid_challenge/perception/model/` → `part_detector_best.pt monitor_ocr_best.pt tray_occupancy_best.pt`. `./docker/container.sh start` 시 누락 경고가 없어야 함(`container.sh:38-56`).
-- **의미**: 노드 기본 모델 경로와 일치 — detector `perception/model/part_detector_best.pt`(`detector_node.py:50`), tray `tray_occupancy_best.pt`(`tray_contents_node.py:23-28`), monitor_ocr `monitor_ocr_best.pt`(`monitor_ocr/ocr_pipeline_parts.py`의 `default_yolo_model_path`).
+- **의미**: 노드 기본 모델 경로와 일치 — detector `perception/model/part_detector_best.pt`, tray `tray_occupancy_best.pt`(`tray_manage_node.py`), monitor_ocr `monitor_ocr_best.pt`(`monitor_ocr/ocr_pipeline_parts.py`의 `default_yolo_model_path`).
 - **실제 사용**: 모델 없으면 detector/tray YOLO 로드 실패 → 검출 0. 빌드 **전** 배치해야 install symlink 정상.
 
 > 배치 후 컨테이너에서 C-0 빌드를 (재)수행한다.
@@ -313,9 +314,9 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
   (인자 기본값 근거 `part_detector.launch.py:24-34`; 노드 shebang `#!/ws/yolo_venv/bin/python3` `detector_node.py:1`)
 - **확인**: `dome_nut conf≈0.89`, `hex_nut conf≈0.86` 등 검출 로그. `ros2 topic echo /detections --once` → `PartDetectionArray`(각 detection `source_camera=wrist_right`).
 - **의미**: 통합 detector가 `perception.msg`로 `/detections` 발행(`detector_node.py:24`). 모델·venv·카메라 정합 확인.
-- **실제 사용**: tray_contents_node·wrist planner가 `/detections`를 구독해 부품을 처리.
+- **실제 사용**: wrist planner가 `/detections`를 구독해 부품 후보를 처리한다.
 
-### E-3. task_management (tray_contents + management) (터미널 B)
+### E-3. task_management (tray_manage_node) (터미널 B)
 
 - **명령**
   ```bash
@@ -323,11 +324,11 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
     image_topic:=/camera_right/camera_right/color/image_rect_raw \
     source_camera_filter:=wrist_right
   ```
-  (tray_contents_node prefix `/ws/yolo_venv` + management_node 동시기동 `task_management.launch.py:44-46,89`; tray 모델 기본 `perception/model/tray_occupancy_best.pt`)
-- **확인**: `TrayContentsNode ready`, `Loading tray YOLO model: …/tray_occupancy_best.pt`, `ManagementNode ready`. `ros2 topic echo /perception/tray_contents` → `tray_count`(트레이 보이면 ≥1). `ros2 topic echo /perception/task_list` → canonical JSON.
-- **확인(트레이 미검출 시)**: `tray_count: 0`이면 트레이를 시야에 두고 재시도, 또는 `-p tray_conf_threshold:=0.30`(낮춤)로 재확인.
-- **의미**: 실 트레이 검출(tray_count≥1) 시 management가 `remaining=ocr−tray`로 적재 진행분을 차감. tray=0이어도 `/perception/task_list`는 정상 발행(`publish_on_empty_tray`).
-- **실제 사용**: 적재가 진행되면 트레이 내 부품이 잡혀 `remaining`이 줄고 mission 완료 판정에 반영.
+  (`tray_manage_node` prefix `/ws/yolo_venv`, tray 모델 기본 `perception/model/tray_occupancy_best.pt`)
+- **확인**: `Loading tray YOLO model: …/tray_occupancy_best.pt`, `TrayManageNode ready`. `ros2 topic echo /perception/tray_roi` → 트레이 bbox. `ros2 topic echo /perception/task_list` → `GetTaskList_Response` typed task list.
+- **확인(트레이 미검출 시)**: `/perception/tray_roi`의 width/height가 0이면 트레이를 시야에 두고 재시도, 또는 `tray_conf_threshold:=0.30`(낮춤)로 재확인.
+- **의미**: 실 트레이 ROI와 OCR 기반 task list가 같은 launch에서 동작한다.
+- **실제 사용**: task list는 mission_a와 wrist planner의 입력이고, tray ROI는 후속 tray-aware 필터링에 사용할 수 있다.
 
 ### E-4. wrist grasp planner (터미널 C)
 
@@ -364,10 +365,10 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
 |---|---|---|---|
 | C-0 | `--packages-up-to perception` 빌드 성공 | | |
 | C-1 | 신규 3노드 `ros2 pkg executables` 노출 | | |
-| C-2 | `ManagementNode ready` | | |
-| C-3 | fake OCR `publishing`, management 경고 없음 | | |
-| C-4 | `/perception/task_list` canonical JSON(`dom nut` 포함) | | |
-| C-5 | (선택) fake tray로 `remaining` 차감 | | |
+| C-2 | `TrayManageNode ready` | | |
+| C-3 | fake OCR `publishing`, tray_manage_node 경고 없음 | | |
+| C-4 | `/perception/task_list` `GetTaskList_Response`(`dom nut` 포함) | | |
+| C-5 | (선택) `/perception/get_task_list` service 응답 | | |
 | C-6 | 토픽 info 발행/구독 배선 | | |
 
 ### 범주 1-2 (mission_a) — [통과/실패/비고]

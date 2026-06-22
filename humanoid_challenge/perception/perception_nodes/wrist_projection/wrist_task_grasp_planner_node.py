@@ -35,6 +35,7 @@ from geometry_msgs.msg import PointStamped, PoseStamped
 import tf2_ros
 from tf2_geometry_msgs import do_transform_point
 
+from mission_interfaces.srv import GetTaskList
 from perception.msg import PartDetectionArray
 from perception_nodes.wrist_projection import wrist_reprojection as wr
 
@@ -259,7 +260,12 @@ class WristTaskGraspPlannerNode(Node):
         )
         self.sync.registerCallback(self.synced_cb)
 
-        self.sub_task = self.create_subscription(String, self.task_topic, self.task_cb, 10)
+        self.sub_task = self.create_subscription(
+            GetTaskList.Response,
+            self.task_topic,
+            self.task_cb,
+            10,
+        )
         self.sub_det = self.create_subscription(
             PartDetectionArray, self.detections_topic, self.detections_cb, 10)
 
@@ -300,17 +306,8 @@ class WristTaskGraspPlannerNode(Node):
 
         self.latest_depth_stamp = depth_msg.header.stamp
 
-    def task_cb(self, msg: String) -> None:
-        try:
-            data = json.loads(msg.data)
-        except Exception as exc:
-            self.get_logger().warn(
-                f'Failed to parse task JSON from {self.task_topic}: {exc}')
-            return
-
-        self.latest_screen_detected = bool(
-            data.get('ocr_latest_screen_detected', data.get('latest_screen_detected', True))
-        )
+    def task_cb(self, msg: GetTaskList.Response) -> None:
+        self.latest_screen_detected = bool(msg.screen_detected)
         if self.require_screen_detected and not self.latest_screen_detected:
             self.current_tasks = {}
             self.candidate_history.clear()
@@ -321,28 +318,19 @@ class WristTaskGraspPlannerNode(Node):
             self.get_logger().warn('Task screen is not detected; cleared active task list.')
             return
 
-        parts = data.get('parts', [])
         tasks: Dict[str, int] = {}
 
-        if isinstance(parts, list):
-            for item in parts:
-                if not isinstance(item, dict):
-                    continue
+        for item in msg.parts:
+            raw_name = str(item.name).strip()
+            if not raw_name:
+                continue
 
-                raw_name = str(item.get('name', '')).strip()
-                if not raw_name:
-                    continue
+            count = int(item.count)
+            if count <= 0:
+                continue
 
-                try:
-                    count = int(item.get('count', 1))
-                except Exception:
-                    count = 1
-
-                if count <= 0:
-                    continue
-
-                cls = self._canonical_label(raw_name)
-                tasks[cls] = tasks.get(cls, 0) + count
+            cls = self._canonical_label(raw_name)
+            tasks[cls] = tasks.get(cls, 0) + count
 
         previous_tasks = self.current_tasks
         self.current_tasks = tasks
