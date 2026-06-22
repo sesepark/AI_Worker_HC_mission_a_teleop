@@ -1,0 +1,14 @@
+# MoveToScanPose — manipulation 이 wrist 카메라가 박스 전체 FOV를 보도록
+# 스캔 초기 포즈(3-waypoint + 상체 높이)를 형성한다.
+# 형성 알고리즘/preset 은 manipulation 내부 소유. System(FSM)은 트리거·완료 확인만.
+# (scan 액션은 통합 검증에서 정상 동작하므로 Action 유지 — SDR v2.3)
+#
+# Goal
+string preset_id          # 선택. "" = manipulation 기본 스캔 포즈 preset
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 progress          # 0.0..1.0 (선택; mock 은 0 가능)
