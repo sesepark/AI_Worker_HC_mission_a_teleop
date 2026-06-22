@@ -1,6 +1,6 @@
 # perception
 
-YOLO 기반 부품 탐지 ROS 2 패키지입니다. RGB image 토픽을 입력으로 받아 탐지 결과를 custom message로 발행하고, head/wrist 3D 변환 패키지들이 이 결과를 구독합니다.
+YOLO 기반 부품 탐지 ROS 2 노드입니다. RGB image 토픽을 입력으로 받아 탐지 결과를 custom message로 발행하고, `wrist_task_grasp_planner_node`가 이 결과를 구독해 최종 grasp target을 고릅니다.
 
 ## Messages
 
@@ -26,5 +26,4 @@ ros2 launch perception part_detector.launch.py
 
 ## Model Weights
 
-`weights/best.pt` 같은 모델 파일은 GitHub 저장소에 직접 올리지 않는 것을 권장합니다.
-GitHub Release, Git LFS, Hugging Face, Google Drive, 또는 사내 스토리지에 따로 올리고 clone 후 `weights/` 아래에 배치하세요.
+기본 모델 경로는 `perception/model/part_detector_best.pt`입니다. 다른 모델을 쓰려면 launch argument `model_path:=...`로 override하세요.
