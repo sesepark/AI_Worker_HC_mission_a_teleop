@@ -82,7 +82,7 @@ class MissionA(Node):
             self.declare_parameter('task_list_service_timeout_sec', float(TIMEOUT_A1_OCR)).value)
         self.task_list_service_frame_count = int(
             self.declare_parameter('task_list_service_frame_count', 3).value)
-        # 검증된 토픽 파이프라인: management_node → /perception/task_list (std_msgs/String JSON).
+        # 검증된 토픽 파이프라인: tray_manage_node → /perception/task_list (std_msgs/String JSON).
         self.task_list_topic = str(
             self.declare_parameter('task_list_topic', '/perception/task_list').value)
         # 기본은 토픽 구독. True 면 (구) GetTaskList 서비스 능동요청 경로 병행.
@@ -103,7 +103,7 @@ class MissionA(Node):
             self._on_target_pose, 10)
         self.sub_attached_object = self.create_subscription(
             String, '/attached_object', self._on_attached_object, 10)
-        # task list 입력 = management_node 토픽(검증된 파이프라인).
+        # task list 입력 = tray_manage_node 토픽(검증된 파이프라인).
         self.sub_task_list = self.create_subscription(
             String, self.task_list_topic, self._on_task_list, 10)
 
@@ -185,7 +185,7 @@ class MissionA(Node):
         self.get_logger().debug(f'[sub] /attached_object = "{msg.data}"')
 
     def _on_task_list(self, msg: String) -> None:
-        """management_node /perception/task_list (String JSON) 구독.
+        """tray_manage_node /perception/task_list (String JSON) 구독.
 
         JSON: {"parts": [{"name": "flange nut", "count": 1}, ...], ...}
         - INIT/A1_MONITOR 단계에서만 목표 task_list 를 (재)빌드한다.

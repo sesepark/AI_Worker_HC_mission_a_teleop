@@ -64,19 +64,9 @@ install(PROGRAMS
   RENAME wrist_task_grasp_planner_node
 )
 install(PROGRAMS
-  perception_nodes/tray_occupancy/tray_occupancy_node.py
+  perception_nodes/management/tray_manage_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME tray_occupancy_node
-)
-install(PROGRAMS
-  perception_nodes/tray_occupancy/tray_contents_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME tray_contents_node
-)
-install(PROGRAMS
-  perception_nodes/management/management_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME management_node
+  RENAME tray_manage_node
 )
 install(PROGRAMS
   perception_nodes/monitor_ocr/monitor_ocr_topic_node.py

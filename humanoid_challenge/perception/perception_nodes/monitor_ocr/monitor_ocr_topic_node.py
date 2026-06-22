@@ -2,7 +2,7 @@
 """
 ROS2 노드: 카메라 이미지 → 대시보드 OCR → /monitor_ocr/result 토픽 발행
 
-검증된 토픽 파이프라인(monitor_ocr → management_node)을 위한 토픽 발행 노드.
+검증된 토픽 파이프라인(monitor_ocr → tray_manage_node)을 위한 토픽 발행 노드.
 기존 서비스 노드(monitor_ocr_node.py, GetTaskList)와 병행 사용하며, 동일한 공용
 OCR 파이프라인(process_frame_parts + FrameAggregatorParts)을 재사용한다.
 

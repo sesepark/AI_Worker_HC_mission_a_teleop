@@ -51,7 +51,7 @@ prepare_workspace() {
 
     if [ ! -f "${PROJECT_DIR}/perception/model/tray_occupancy_best.pt" ]; then
         echo "Warning: perception/model/tray_occupancy_best.pt is missing."
-        echo "         tray_occupancy_node will build, but tray YOLO startup needs that model file."
+        echo "         tray_manage_node will build, but tray YOLO startup needs that model file."
     fi
 }
 

@@ -9,7 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    default_tray_model = os.environ.get(
+    default_model = os.environ.get(
         "TRAY_MODEL_PATH",
         os.path.join(
             get_package_share_directory("perception"),
@@ -19,10 +19,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument("detections_topic", default_value="/detections"),
-        DeclareLaunchArgument("image_topic", default_value="/zed/zed_node/rgb/image_rect_color"),
-        DeclareLaunchArgument("tray_contents_topic", default_value="/perception/tray_contents"),
-        DeclareLaunchArgument("tray_model_path", default_value=default_tray_model),
+        DeclareLaunchArgument("image_topic", default_value="/camera_right/camera_right/color/image_rect_raw"),
+        DeclareLaunchArgument("ocr_result_topic", default_value="/monitor_ocr/result"),
+        DeclareLaunchArgument("task_list_topic", default_value="/perception/task_list"),
+        DeclareLaunchArgument("tray_roi_topic", default_value="/perception/tray_roi"),
+        DeclareLaunchArgument("tray_model_path", default_value=default_model),
         DeclareLaunchArgument("tray_conf_threshold", default_value="0.50"),
         DeclareLaunchArgument("tray_iou_threshold", default_value="0.35"),
         DeclareLaunchArgument("tray_imgsz", default_value="640"),
@@ -30,24 +31,20 @@ def generate_launch_description():
         DeclareLaunchArgument("tray_process_interval_sec", default_value="0.10"),
         DeclareLaunchArgument("tray_stable_frames", default_value="3"),
         DeclareLaunchArgument("tray_min_hits", default_value="2"),
-        DeclareLaunchArgument("ocr_result_topic", default_value="/monitor_ocr/result"),
-        DeclareLaunchArgument("task_list_topic", default_value="/perception/task_list"),
-        DeclareLaunchArgument("stable_frames", default_value="3"),
-        DeclareLaunchArgument("part_min_confidence", default_value="0.30"),
-        DeclareLaunchArgument("bbox_margin_px", default_value="0.0"),
-        DeclareLaunchArgument("source_camera_filter", default_value=""),
         DeclareLaunchArgument("require_complete_ocr", default_value="true"),
+        DeclareLaunchArgument("mock_monitor_ocr", default_value="false"),
         DeclareLaunchArgument("tray_python", default_value="/ws/yolo_venv/bin/python3"),
 
         Node(
             package="perception",
-            executable="tray_contents_node",
-            name="tray_contents_node",
+            executable="tray_manage_node",
+            name="tray_manage_node",
             prefix=LaunchConfiguration("tray_python"),
             parameters=[{
-                "detections_topic": LaunchConfiguration("detections_topic"),
                 "image_topic": LaunchConfiguration("image_topic"),
-                "tray_contents_topic": LaunchConfiguration("tray_contents_topic"),
+                "ocr_result_topic": LaunchConfiguration("ocr_result_topic"),
+                "task_list_topic": LaunchConfiguration("task_list_topic"),
+                "tray_roi_topic": LaunchConfiguration("tray_roi_topic"),
                 "tray_model_path": LaunchConfiguration("tray_model_path"),
                 "tray_conf_threshold": ParameterValue(
                     LaunchConfiguration("tray_conf_threshold"),
@@ -74,26 +71,12 @@ def generate_launch_description():
                     LaunchConfiguration("tray_min_hits"),
                     value_type=int,
                 ),
-                "stable_frames": ParameterValue(LaunchConfiguration("stable_frames"), value_type=int),
-                "part_min_confidence": ParameterValue(
-                    LaunchConfiguration("part_min_confidence"),
-                    value_type=float,
-                ),
-                "bbox_margin_px": ParameterValue(LaunchConfiguration("bbox_margin_px"), value_type=float),
-                "source_camera_filter": LaunchConfiguration("source_camera_filter"),
-            }],
-            output="screen",
-        ),
-        Node(
-            package="perception",
-            executable="management_node",
-            name="management_node",
-            parameters=[{
-                "ocr_result_topic": LaunchConfiguration("ocr_result_topic"),
-                "tray_contents_topic": LaunchConfiguration("tray_contents_topic"),
-                "task_list_topic": LaunchConfiguration("task_list_topic"),
                 "require_complete_ocr": ParameterValue(
                     LaunchConfiguration("require_complete_ocr"),
+                    value_type=bool,
+                ),
+                "mock_monitor_ocr": ParameterValue(
+                    LaunchConfiguration("mock_monitor_ocr"),
                     value_type=bool,
                 ),
             }],

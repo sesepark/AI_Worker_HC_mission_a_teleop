@@ -12,8 +12,8 @@ from __future__ import annotations
 
 # 한국어 부품명 → detector class_name (PERCEPTION_INTERFACE.md 기준)
 # normalize_part_name 이 모든 공백을 제거하므로 매핑 키도 공백 없는 형태로 둔다.
-# 영문 canonical(management_node /perception/task_list 출력: "flange nut" .. "dom nut") 대응 키를 함께 둔다.
-# ★ management 는 "dom nut"(e 없음)을 발행하지만 detector class 는 "dome_nut" 이므로
+# 영문 canonical(tray_manage_node /perception/task_list 출력: "flange nut" .. "dom nut") 대응 키를 함께 둔다.
+# ★ tray_manage_node 는 "dom nut"(e 없음)을 발행하지만 detector class 는 "dome_nut" 이므로
 #   'domnut' → 'dome_nut' 브리지가 핵심.
 PART_NAME_TO_CLASS: dict[str, str] = {
     # 한국어 (공백 제거 키)
