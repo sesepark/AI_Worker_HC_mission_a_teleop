@@ -5,6 +5,7 @@
   o  → open
   c  → close
   t  → toggle
+  n  → 숫자 입력 후 엔터 → open_to(amount)
   l  → left side
   r  → right side
   b  → both
@@ -44,7 +45,7 @@ def main():
 
     side = 'right'
     log.info(f'[test_gripper] 시작 — side={side}')
-    log.info('[test_gripper] o=open  c=close  t=toggle  l=left  r=right  b=both  q=quit')
+    log.info('[test_gripper] o=open  c=close  t=toggle  n=open_to  l=left  r=right  b=both  q=quit')
 
     while True:
         key = _getch()
@@ -82,6 +83,20 @@ def main():
             gripper.wait_motion()
             pos = gripper._command.get_position('left' if side == 'both' else side)
             log.info(f'[test_gripper] position: {pos}')
+        elif key == 'n':
+            sys.stdout.write('amount (0.0~1.0): ')
+            sys.stdout.flush()
+            raw = sys.stdin.readline().strip()
+            try:
+                amount = float(raw)
+                log.info(f'[test_gripper] open_to {amount} ({side})')
+                gripper.open_to(side, amount)
+                gripper.wait_until_executed()
+                gripper.wait_motion()
+                pos = gripper._command.get_position('left' if side == 'both' else side)
+                log.info(f'[test_gripper] position: {pos}')
+            except ValueError:
+                log.warn(f'[test_gripper] 숫자가 아닙니다: {raw!r}')
 
     node.destroy_node()
     rclpy.shutdown()

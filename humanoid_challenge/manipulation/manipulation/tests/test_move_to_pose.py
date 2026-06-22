@@ -1,6 +1,7 @@
 """
 지정 pose로 이동 테스트.
 좌표와 자세를 직접 수정해서 팔이 원하는 위치로 가는지 확인.
+이동 완료 후 실제 joint 값을 출력 → 하드코딩 poses 갱신에 활용.
 
 실행:
   ros2 run manipulation test_move_to_pose
@@ -18,12 +19,12 @@ PIPELINE = 'ompl'
 PLANNER  = 'RRTConnect'
 
 # 목표 위치 (base_link 기준, 단위: m)
-TARGET_X =  0.400
-TARGET_Y = -0.200
-TARGET_Z =  0.900
+TARGET_X =  0.320
+TARGET_Y = -0.250
+TARGET_Z =  1.350
 
 # top-down 수직 자세 quaternion (pitch=90°, roll=0°, yaw=0°)
-TARGET_QX, TARGET_QY, TARGET_QZ, TARGET_QW = 0.0, 0.7071, 0.0, 0.7071
+TARGET_QX, TARGET_QY, TARGET_QZ, TARGET_QW = 0.0, 0.0, 0.0, 1.0
 # ─────────────────────────────────────────────────────────────────
 
 
@@ -34,7 +35,6 @@ def main():
 
     client = MoveItClient(node)
 
-    # 목표 pose 구성
     pose = Pose()
     pose.position.x    = TARGET_X
     pose.position.y    = TARGET_Y
@@ -50,6 +50,11 @@ def main():
     )
     result = client.move_to_pose(pose, arm=ARM, pipeline=PIPELINE, planner=PLANNER)
     log.info(f'[test_move_to_pose] 결과: {result.value}')
+
+    joints = client.get_joints(arm=ARM)
+    if joints:
+        fmt = [f'{v:.6f}' for v in joints]
+        log.info(f'[test_move_to_pose] joints = [{", ".join(fmt)}]')
 
     node.destroy_node()
     rclpy.shutdown()

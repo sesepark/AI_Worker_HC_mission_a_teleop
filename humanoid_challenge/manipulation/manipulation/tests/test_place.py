@@ -29,8 +29,8 @@ APPROACH_H = 0.05   # hover offset = place_z + 0.05
 # nav 없이 테스트 시 pick 위치(x=0.270, y=-0.250) 근처에서 동작
 # nav 적용 시 로봇이 tray 앞으로 이동했으므로 y ≈ 0.0으로 조정
 PLACE_X = 0.270   # tray center_x (로봇 기준, nav 후 pick x와 유사)
-PLACE_Y = -0.250  # nav 없는 테스트용 — nav 후에는 0.0 근처
-PLACE_Z = 0.870   # tray 내부 (table 0.800 + tray_floor 0.010 + margin 0.060)
+PLACE_Y = -0.10  # nav 없는 테스트용 — nav 후에는 0.0 근처
+PLACE_Z = 0.880   # tray 내부 (table 0.800 + tray_floor 0.010 + margin 0.060)
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -59,6 +59,7 @@ def main():
         local_mode='hover',
         approach_height=APPROACH_H,
     )
+    
     log.info(f'[test_place] 결과: {result.value}')
 
     clear_all_objects(client)
