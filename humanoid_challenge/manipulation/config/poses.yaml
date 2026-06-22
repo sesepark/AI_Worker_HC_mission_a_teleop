@@ -1,6 +1,6 @@
 # 주요 arm pose 정의
 # 단위: 미터, quaternion (xyzw)
-# ⚠️ capture_r은 임시값 — 실물 로봇 텔레옵으로 wrist cam top-down 자세 확인 후 갱신
+# capture_r은 임시값 — 실물 로봇 텔레옵으로 wrist cam top-down 자세 확인 후 갱신
 
 poses:
   # wrist cam으로 yellow_box 내부를 촬영하는 대기 자세 (right arm)

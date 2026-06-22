@@ -122,6 +122,20 @@ class GripperInterface:
             self.OPEN,
         )
 
+    def open_to(self, side, amount: float):
+        """Open gripper to a specific amount (0.0 = fully open, 1.0 = fully closed).
+
+        Use when starting from closed state and opening just enough to fit around an object.
+
+        Examples
+        --------
+        gripper.open_to('right', 0.8)   # 닫힌 상태에서 살짝만 열기
+        gripper.open_to('right', 0.5)   # 절반 열기
+        """
+        side = side.lower()
+        amount = max(self.OPEN, min(self.CLOSE, amount))
+        self.control(side, amount)
+        
     def close(
         self,
         side,
