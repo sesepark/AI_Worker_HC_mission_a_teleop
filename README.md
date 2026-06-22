@@ -59,7 +59,7 @@ AI_Worker_HC/
 - 모델 기본 경로:
   - `humanoid_challenge/perception/model/tray_occupancy_best.pt`
   - `TRAY_MODEL_PATH` 환경 변수 또는 `tray_model_path:=...` launch argument로 override 가능.
-- 이전 `management_node`, `tray_contents_node`, `tray_occupancy_node` 구현 파일은 참고/legacy 용도로 남아 있지만, 새 runtime 경로에서는 `CMakeLists.txt`에 설치하지 않는다. 잘못된 예전 파이프라인이 같이 떠서 `/perception/task_list`를 중복 발행하는 것을 막기 위한 정리다.
+- 이전 `management_node`, `tray_contents_node`, `tray_occupancy_node` 구현 파일은 제거했다. 잘못된 예전 파이프라인이 같이 떠서 `/perception/task_list`를 중복 발행하는 것을 막기 위한 정리다.
 
 #### Wrist grasp target 경로
 - 실행 노드: `perception_nodes/wrist_projection/wrist_task_grasp_planner_node.py`
