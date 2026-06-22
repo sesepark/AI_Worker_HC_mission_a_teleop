@@ -212,7 +212,7 @@ ros2 launch perception wrist_task_grasp_planner.launch.py
 
 ```bash
 ros2 topic pub /perception/task_list mission_interfaces/srv/GetTaskList_Response \
-  "{success: false, message: '{\"ocr_topic\":\"manual\",\"timeout_sec\":30.0,\"frame_count\":1}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'gear ring', count: 2}]}" -r 1
+  "{success: false, message: '{\"ocr_topic\":\"manual\"}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'gear ring', count: 2}]}" -r 1
 
 ros2 topic echo /perception/wrist/target_one_pose
 ```

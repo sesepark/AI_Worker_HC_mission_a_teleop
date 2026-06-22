@@ -591,7 +591,7 @@ ros2 launch perception tray_occupancy.launch.py \
 **`/perception/task_list` message**
 ```yaml
 success: false
-message: '{"ocr_topic":"/monitor_ocr/result","timeout_sec":30.0,"frame_count":10}'
+message: '{"ocr_topic":"/monitor_ocr/result","mock_monitor_ocr":false}'
 screen_detected: true
 all_counts_recognized: true
 frames_used: 10

@@ -18,9 +18,6 @@ from std_msgs.msg import String
 from perception_nodes.name_utils import CANONICAL_PARTS, canonical_part_name
 
 
-TASK_LIST_TIMEOUT_SEC = 30.0
-
-
 class TrayManageNode(Node):
     def __init__(self) -> None:
         super().__init__("tray_manage_node")
@@ -240,8 +237,6 @@ class TrayManageNode(Node):
             "source": {
                 "ocr_topic": self.ocr_result_topic,
                 "mock_monitor_ocr": self.mock_monitor_ocr,
-                "timeout_sec": TASK_LIST_TIMEOUT_SEC,
-                "frame_count": self.frames_used_from_payload(self.last_ocr_payload),
             },
             "ocr_frames_used": self.last_ocr_payload.get("frames_used"),
             "ocr_latest_screen_detected": self.last_ocr_payload.get("latest_screen_detected"),
@@ -259,8 +254,6 @@ class TrayManageNode(Node):
             response.message = json.dumps({
                 "ocr_topic": self.ocr_result_topic,
                 "mock_monitor_ocr": self.mock_monitor_ocr,
-                "timeout_sec": TASK_LIST_TIMEOUT_SEC,
-                "frame_count": 0,
                 "status": "no task list has been published yet",
             }, ensure_ascii=False)
             response.screen_detected = False
@@ -274,12 +267,6 @@ class TrayManageNode(Node):
             source = {"source": source}
 
         frames_used = self.frames_used_from_payload(payload)
-        source = {
-            **source,
-            "timeout_sec": TASK_LIST_TIMEOUT_SEC,
-            "frame_count": frames_used,
-        }
-
         screen_detected = bool(payload.get("ocr_latest_screen_detected", False))
         response.success = bool(payload.get("mission_complete", False))
         response.message = json.dumps(source, ensure_ascii=False)

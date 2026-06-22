@@ -159,7 +159,7 @@ cd ~/AI_Worker_HC/humanoid_challenge
 - **확인**: 다음 형상의 typed message:
   ```yaml
   success: false
-  message: '{"ocr_topic":"/monitor_ocr/result","mock_monitor_ocr":false,"timeout_sec":30.0,"frame_count":10}'
+  message: '{"ocr_topic":"/monitor_ocr/result","mock_monitor_ocr":false}'
   screen_detected: true
   all_counts_recognized: true
   frames_used: 10
@@ -239,7 +239,7 @@ mission_a의 INIT→A1 전이는 `/manipulator_state == 'IDLE'` 또는 타임아
   - (b) **단축**: task_list를 직접 발행
     ```bash
     ros2 topic pub /perception/task_list mission_interfaces/srv/GetTaskList_Response \
-    "{success: false, message: '{\"ocr_topic\":\"manual\",\"timeout_sec\":30.0,\"frame_count\":1}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'flange nut', count: 1}, {name: 'gear ring', count: 2}, {name: 'spacer ring', count: 1}, {name: 'hex nut', count: 4}, {name: 'dom nut', count: 2}]}" -r 1
+    "{success: false, message: '{\"ocr_topic\":\"manual\"}', screen_detected: true, all_counts_recognized: true, frames_used: 1, parts: [{name: 'flange nut', count: 1}, {name: 'gear ring', count: 2}, {name: 'spacer ring', count: 1}, {name: 'hex nut', count: 4}, {name: 'dom nut', count: 2}]}" -r 1
     ```
 - **확인**(터미널 2 mission_a 로그, 순서대로):
   ```
