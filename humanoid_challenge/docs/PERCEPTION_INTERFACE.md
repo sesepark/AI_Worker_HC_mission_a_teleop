@@ -28,6 +28,10 @@ detector_node
 | `wrist_task_grasp_planner_node` | `ros2 launch perception wrist_task_grasp_planner.launch.py` | task 대상 중 최종 grasp pose 1개 선택 |
 
 `wrist_all.launch.py`는 `wrist_task_grasp_planner_node`만 띄우는 alias다.
+`manipulation_mock.launch.py`는 manipulation팀 target 테스트용 bundle이며
+`detector_node`, `tray_manage_node(mock_monitor_ocr:=true, enable_tray_detection:=false)`,
+`wrist_task_grasp_planner_node(weight_arm_proximity:=0.0, temporal_smoothing_enable:=false)`를
+같이 실행한다.
 
 ## Topic Contract
 

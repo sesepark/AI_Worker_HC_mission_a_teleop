@@ -83,6 +83,29 @@ AI_Worker_HC/
   - `/detections` (`perception/msg/PartDetectionArray`)
   - `/detector_debug_image` (`sensor_msgs/Image`)
 
+#### Manipulation mock 경로
+- manipulation팀이 perception target topic만 바로 받아 테스트할 수 있도록 세 노드를 한 번에 띄우는 launch를 제공한다.
+- launch 진입점:
+  ```bash
+  ros2 launch perception manipulation_mock.launch.py
+  ```
+- 위 명령은 통합 전 아래 세 명령을 `perception` 단일 패키지 기준으로 묶은 것이다.
+  ```bash
+  ros2 launch perception part_detector.launch.py camera_name:=wrist_right
+  ros2 launch perception task_management.launch.py mock_monitor_ocr:=true
+  ros2 launch perception wrist_task_grasp_planner.launch.py
+  ```
+- 기본값:
+  - `detector_camera_name:=wrist_right`
+  - `mock_monitor_ocr:=true`
+  - `enable_tray_detection:=false`
+  - `weight_arm_proximity:=0.0`
+  - `temporal_smoothing_enable:=false`
+- mock launch는 기본적으로 tray YOLO를 로드하지 않는다. tray ROI까지 같이 확인하려면 `enable_tray_detection:=true`와 `tray_model_path:=...`를 넘긴다.
+- manipulation팀이 바로 보면 되는 출력:
+  - `/perception/wrist/target_one_pose`
+  - `/perception/wrist/target_one_detection`
+
 #### Task management 경로
 - 새 실행 노드: `perception_nodes/management/tray_manage_node.py`
 - 설치 실행명: `ros2 run perception tray_manage_node`

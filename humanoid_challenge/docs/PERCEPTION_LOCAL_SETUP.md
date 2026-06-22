@@ -23,6 +23,18 @@ source install/setup.bash
 
 ## Run Order
 
+Manipulation팀 mock target 테스트는 아래 한 줄로 실행한다.
+
+```bash
+ros2 launch perception manipulation_mock.launch.py
+```
+
+이 launch는 `detector_node`, `tray_manage_node(mock_monitor_ocr:=true, enable_tray_detection:=false)`,
+`wrist_task_grasp_planner_node(weight_arm_proximity:=0.0, temporal_smoothing_enable:=false)`를
+같이 실행한다.
+
+전체 OCR 포함 경로를 분리해서 띄울 때는 아래 순서를 사용한다.
+
 ```bash
 ros2 launch perception monitor_ocr.launch.py
 ros2 launch perception part_detector.launch.py camera_name:=wrist_right

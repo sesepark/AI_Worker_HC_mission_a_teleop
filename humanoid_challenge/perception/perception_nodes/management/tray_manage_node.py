@@ -35,6 +35,7 @@ class TrayManageNode(Node):
         self.declare_parameter("tray_process_interval_sec", 0.10)
         self.declare_parameter("tray_stable_frames", 3)
         self.declare_parameter("tray_min_hits", 2)
+        self.declare_parameter("enable_tray_detection", True)
         self.declare_parameter("require_complete_ocr", True)
         self.declare_parameter("mock_monitor_ocr", False)
 
@@ -53,6 +54,7 @@ class TrayManageNode(Node):
         self.tray_process_interval_sec = float(self.get_parameter("tray_process_interval_sec").value)
         self.tray_stable_frames = max(1, int(self.get_parameter("tray_stable_frames").value))
         self.tray_min_hits = max(1, int(self.get_parameter("tray_min_hits").value))
+        self.enable_tray_detection = bool(self.get_parameter("enable_tray_detection").value)
         self.require_complete_ocr = bool(self.get_parameter("require_complete_ocr").value)
         self.mock_monitor_ocr = bool(self.get_parameter("mock_monitor_ocr").value)
 
@@ -64,12 +66,20 @@ class TrayManageNode(Node):
         self.latest_tray_stamp = None
         self.last_tray_process_time = 0.0
 
-        from cv_bridge import CvBridge
-        from ultralytics import YOLO
+        self.bridge = None
+        self.tray_model = None
+        if self.enable_tray_detection:
+            from cv_bridge import CvBridge
+            from ultralytics import YOLO
 
-        self.get_logger().info(f"Loading tray YOLO model: {tray_model_path}")
-        self.bridge = CvBridge()
-        self.tray_model = YOLO(tray_model_path)
+            self.get_logger().info(f"Loading tray YOLO model: {tray_model_path}")
+            self.bridge = CvBridge()
+            self.tray_model = YOLO(tray_model_path)
+        else:
+            self.get_logger().warn(
+                "enable_tray_detection=false: skipping tray YOLO model load "
+                "and /perception/tray_roi updates."
+            )
 
         self.pub_task = self.create_publisher(
             GetTaskList.Response,
@@ -84,7 +94,13 @@ class TrayManageNode(Node):
         )
 
         self.create_subscription(String, self.ocr_result_topic, self.ocr_callback, 10)
-        self.create_subscription(Image, self.image_topic, self.image_callback, qos_profile_sensor_data)
+        if self.enable_tray_detection:
+            self.create_subscription(
+                Image,
+                self.image_topic,
+                self.image_callback,
+                qos_profile_sensor_data,
+            )
 
         if self.mock_monitor_ocr:
             self.set_mock_ocr_counts()
@@ -99,7 +115,8 @@ class TrayManageNode(Node):
             f"image_topic={self.image_topic}, ocr_result_topic={self.ocr_result_topic}, "
             f"task_list_topic={self.task_list_topic}, "
             f"task_list_service={self.task_list_service_name}, "
-            f"tray_roi_topic={self.tray_roi_topic}"
+            f"tray_roi_topic={self.tray_roi_topic}, "
+            f"enable_tray_detection={self.enable_tray_detection}"
         )
 
     @staticmethod
@@ -159,6 +176,9 @@ class TrayManageNode(Node):
         }
 
     def image_callback(self, msg: Image) -> None:
+        if not self.enable_tray_detection or self.bridge is None or self.tray_model is None:
+            return
+
         now = self.get_clock().now().nanoseconds * 1e-9
         if now - self.last_tray_process_time < self.tray_process_interval_sec:
             return
@@ -237,6 +257,7 @@ class TrayManageNode(Node):
             "source": {
                 "ocr_topic": self.ocr_result_topic,
                 "mock_monitor_ocr": self.mock_monitor_ocr,
+                "enable_tray_detection": self.enable_tray_detection,
             },
             "ocr_frames_used": self.last_ocr_payload.get("frames_used"),
             "ocr_latest_screen_detected": self.last_ocr_payload.get("latest_screen_detected"),

@@ -36,6 +36,34 @@ ros2 topic echo --once /detections
 ros2 topic echo --once /detector_debug_image
 ```
 
+## manipulation mock bundle
+
+Manipulation팀이 OCR 없이 wrist target topic을 확인할 때는 아래 launch 하나만 사용한다.
+
+```bash
+ros2 launch perception manipulation_mock.launch.py
+```
+
+기본값:
+
+```bash
+detector_camera_name:=wrist_right
+mock_monitor_ocr:=true
+enable_tray_detection:=false
+weight_arm_proximity:=0.0
+temporal_smoothing_enable:=false
+```
+
+기본값에서는 tray YOLO를 로드하지 않는다. tray ROI까지 확인하려면
+`enable_tray_detection:=true tray_model_path:=...`를 추가한다.
+
+확인:
+
+```bash
+ros2 topic echo /perception/wrist/target_one_pose
+ros2 topic echo /perception/wrist/target_one_detection
+```
+
 ## tray_manage_node
 
 ```bash
