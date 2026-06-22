@@ -22,6 +22,8 @@ def generate_launch_description():
         DeclareLaunchArgument("image_topic", default_value="/camera_right/camera_right/color/image_rect_raw"),
         DeclareLaunchArgument("ocr_result_topic", default_value="/monitor_ocr/result"),
         DeclareLaunchArgument("task_list_topic", default_value="/perception/task_list"),
+        DeclareLaunchArgument("task_list_response_topic", default_value="/perception/task_list_response"),
+        DeclareLaunchArgument("task_list_service_name", default_value="/perception/get_task_list"),
         DeclareLaunchArgument("tray_roi_topic", default_value="/perception/tray_roi"),
         DeclareLaunchArgument("tray_model_path", default_value=default_model),
         DeclareLaunchArgument("tray_conf_threshold", default_value="0.50"),
@@ -44,6 +46,8 @@ def generate_launch_description():
                 "image_topic": LaunchConfiguration("image_topic"),
                 "ocr_result_topic": LaunchConfiguration("ocr_result_topic"),
                 "task_list_topic": LaunchConfiguration("task_list_topic"),
+                "task_list_response_topic": LaunchConfiguration("task_list_response_topic"),
+                "task_list_service_name": LaunchConfiguration("task_list_service_name"),
                 "tray_roi_topic": LaunchConfiguration("tray_roi_topic"),
                 "tray_model_path": LaunchConfiguration("tray_model_path"),
                 "tray_conf_threshold": ParameterValue(

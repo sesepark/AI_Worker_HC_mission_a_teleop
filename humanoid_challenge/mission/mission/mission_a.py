@@ -247,7 +247,7 @@ class MissionA(Node):
             return
 
         self._task_list_service_next_try_time = self._now() + 2.0
-        if not response.success:
+        if not response.success and not response.parts:
             self.get_logger().warn(f'task_list service failed: {response.message}')
             return
 
@@ -258,7 +258,7 @@ class MissionA(Node):
         self.task_list.build_from_ocr_parts(parts)
         self.get_logger().info(
             f'[A1_MONITOR] task_list service result: {self.task_list} '
-            f'(frames={response.frames_used})')
+            f'(frames={response.frames_used}, mission_complete={response.success})')
 
     # ----------------------------------------------------------------------- #
     # State dispatch

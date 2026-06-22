@@ -10,10 +10,15 @@ from typing import Dict
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from mission_interfaces.msg import TaskItem
+from mission_interfaces.srv import GetTaskList
 from sensor_msgs.msg import Image, RegionOfInterest
 from std_msgs.msg import String
 
 from perception_nodes.name_utils import CANONICAL_PARTS, canonical_part_name
+
+
+TASK_LIST_TIMEOUT_SEC = 30.0
 
 
 class TrayManageNode(Node):
@@ -23,6 +28,8 @@ class TrayManageNode(Node):
         self.declare_parameter("image_topic", "/camera_right/camera_right/color/image_rect_raw")
         self.declare_parameter("ocr_result_topic", "/monitor_ocr/result")
         self.declare_parameter("task_list_topic", "/perception/task_list")
+        self.declare_parameter("task_list_response_topic", "/perception/task_list_response")
+        self.declare_parameter("task_list_service_name", "/perception/get_task_list")
         self.declare_parameter("tray_roi_topic", "/perception/tray_roi")
         self.declare_parameter("tray_model_path", self.default_model_path())
         self.declare_parameter("tray_conf_threshold", 0.50)
@@ -38,6 +45,10 @@ class TrayManageNode(Node):
         self.image_topic = str(self.get_parameter("image_topic").value)
         self.ocr_result_topic = str(self.get_parameter("ocr_result_topic").value)
         self.task_list_topic = str(self.get_parameter("task_list_topic").value)
+        self.task_list_response_topic = str(
+            self.get_parameter("task_list_response_topic").value)
+        self.task_list_service_name = str(
+            self.get_parameter("task_list_service_name").value)
         self.tray_roi_topic = str(self.get_parameter("tray_roi_topic").value)
         tray_model_path = str(self.get_parameter("tray_model_path").value)
 
@@ -53,6 +64,7 @@ class TrayManageNode(Node):
 
         self.ocr_counts: Dict[str, int] = {}
         self.last_ocr_payload = {}
+        self.last_task_list_payload = None
         self.tray_history = deque(maxlen=self.tray_stable_frames)
         self.latest_tray_frame_id = ""
         self.latest_tray_stamp = None
@@ -66,7 +78,17 @@ class TrayManageNode(Node):
         self.tray_model = YOLO(tray_model_path)
 
         self.pub_task = self.create_publisher(String, self.task_list_topic, 10)
+        self.pub_task_response = self.create_publisher(
+            GetTaskList.Response,
+            self.task_list_response_topic,
+            10,
+        )
         self.pub_tray_roi = self.create_publisher(RegionOfInterest, self.tray_roi_topic, 10)
+        self.task_list_service = self.create_service(
+            GetTaskList,
+            self.task_list_service_name,
+            self.handle_get_task_list,
+        )
 
         self.create_subscription(String, self.ocr_result_topic, self.ocr_callback, 10)
         self.create_subscription(Image, self.image_topic, self.image_callback, qos_profile_sensor_data)
@@ -82,7 +104,10 @@ class TrayManageNode(Node):
         self.get_logger().info(
             "TrayManageNode ready. "
             f"image_topic={self.image_topic}, ocr_result_topic={self.ocr_result_topic}, "
-            f"task_list_topic={self.task_list_topic}, tray_roi_topic={self.tray_roi_topic}"
+            f"task_list_topic={self.task_list_topic}, "
+            f"task_list_response_topic={self.task_list_response_topic}, "
+            f"task_list_service={self.task_list_service_name}, "
+            f"tray_roi_topic={self.tray_roi_topic}"
         )
 
     @staticmethod
@@ -206,24 +231,91 @@ class TrayManageNode(Node):
         if not self.ocr_counts:
             return
 
+        payload = self.make_task_list_payload()
+        self.last_task_list_payload = payload
+
+        out = String()
+        out.data = json.dumps(payload, ensure_ascii=False)
+        self.pub_task.publish(out)
+        self.pub_task_response.publish(self.task_list_response_from_payload(payload))
+
+    def make_task_list_payload(self) -> dict:
         parts = [
             {"name": name, "count": int(self.ocr_counts.get(name, 0))}
             for name in CANONICAL_PARTS
         ]
-        payload = {
+        return {
             "parts": parts,
             "source": {
                 "ocr_topic": self.ocr_result_topic,
                 "mock_monitor_ocr": self.mock_monitor_ocr,
+                "timeout_sec": TASK_LIST_TIMEOUT_SEC,
+                "frame_count": self.frames_used_from_payload(self.last_ocr_payload),
             },
             "ocr_frames_used": self.last_ocr_payload.get("frames_used"),
             "ocr_latest_screen_detected": self.last_ocr_payload.get("latest_screen_detected"),
             "mission_complete": all(int(part["count"]) == 0 for part in parts),
         }
 
-        out = String()
-        out.data = json.dumps(payload, ensure_ascii=False)
-        self.pub_task.publish(out)
+    def task_list_response_from_payload(self, payload) -> GetTaskList.Response:
+        response = GetTaskList.Response()
+        self.fill_task_list_response(response, payload)
+        return response
+
+    def fill_task_list_response(self, response, payload) -> GetTaskList.Response:
+        if payload is None:
+            response.success = False
+            response.message = json.dumps({
+                "ocr_topic": self.ocr_result_topic,
+                "mock_monitor_ocr": self.mock_monitor_ocr,
+                "timeout_sec": TASK_LIST_TIMEOUT_SEC,
+                "frame_count": 0,
+                "status": "no task list has been published yet",
+            }, ensure_ascii=False)
+            response.screen_detected = False
+            response.all_counts_recognized = False
+            response.frames_used = 0
+            response.parts = []
+            return response
+
+        source = payload.get("source", {})
+        if not isinstance(source, dict):
+            source = {"source": source}
+
+        frames_used = self.frames_used_from_payload(payload)
+        source = {
+            **source,
+            "timeout_sec": TASK_LIST_TIMEOUT_SEC,
+            "frame_count": frames_used,
+        }
+
+        screen_detected = bool(payload.get("ocr_latest_screen_detected", False))
+        response.success = bool(payload.get("mission_complete", False))
+        response.message = json.dumps(source, ensure_ascii=False)
+        response.screen_detected = screen_detected
+        response.all_counts_recognized = screen_detected
+        response.frames_used = frames_used
+        response.parts = [
+            TaskItem(name=str(item.get("name", "")), count=int(item.get("count", 0)))
+            for item in payload.get("parts", [])
+            if isinstance(item, dict)
+        ]
+        return response
+
+    @staticmethod
+    def frames_used_from_payload(payload) -> int:
+        if not isinstance(payload, dict):
+            return 0
+
+        value = payload.get("ocr_frames_used", payload.get("frames_used", 0))
+        try:
+            return max(0, min(65535, int(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def handle_get_task_list(self, request, response):
+        del request
+        return self.fill_task_list_response(response, self.last_task_list_payload)
 
     def current_trays(self):
         now = self.get_clock().now().nanoseconds * 1e-9

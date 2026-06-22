@@ -55,7 +55,19 @@ AI_Worker_HC/
   - `/camera_right/camera_right/color/image_rect_raw` (`sensor_msgs/Image`, tray YOLO 입력)
 - 출력:
   - `/perception/task_list` (`std_msgs/String`, canonical part count JSON)
+  - `/perception/task_list_response` (`mission_interfaces/srv/GetTaskList_Response`, typed task list state)
+  - `/perception/get_task_list` (`mission_interfaces/srv/GetTaskList`, latest task list service)
   - `/perception/tray_roi` (`sensor_msgs/RegionOfInterest`, 최신 tray bbox)
+- `GetTaskList` 변환 규칙:
+  - `mission_complete` -> `success`
+  - `source` -> `message` (`source` dict를 JSON string으로 직렬화)
+  - `ocr_latest_screen_detected` -> `all_counts_recognized`
+  - `ocr_frames_used` -> `frames_used`
+  - `parts` -> `mission_interfaces/TaskItem[] parts`
+  - `timeout_sec`는 `30.0`으로 고정해 `message`의 source JSON에 포함한다.
+  - `frame_count`는 `/monitor_ocr/result`의 `frames_used` 값을 사용해 `message`의 source JSON에 포함한다.
+- `/perception/task_list` String JSON은 기존 `mission_a` 구독 호환을 위해 유지한다. `GetTaskList` service 이름은 기본적으로 `/perception/get_task_list`이며, System FSM의 service fallback에 직접 연결하려면 `task_list_service_name:=/mission_a/task_list`로 override할 수 있다.
+- `mission_a`의 service fallback은 이 매핑을 반영해, `success=false`라도 `parts`가 있으면 task list를 반영한다. 여기서 `success`는 RPC 성공 여부가 아니라 `mission_complete` 상태다.
 - 모델 기본 경로:
   - `humanoid_challenge/perception/model/tray_occupancy_best.pt`
   - `TRAY_MODEL_PATH` 환경 변수 또는 `tray_model_path:=...` launch argument로 override 가능.
