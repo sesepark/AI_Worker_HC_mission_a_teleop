@@ -701,6 +701,48 @@ class MoveItClient:
             self._log.info(f'[check_reachable] [{arm.value}] reachable={reachable}')
             return reachable
 
+    def solve_ik(self, pose: Pose, arm: Arm = Arm.RIGHT) -> list[float] | None:
+        """Return joint values [joint1..joint7] for pose via IK, or None on failure."""
+        self._guard()
+        with self._lock(arm):
+            moveit2 = self._moveit(arm)
+
+            position = (pose.position.x, pose.position.y, pose.position.z)
+            quat     = (
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+
+            future = moveit2.compute_ik_async(position, quat)
+            if future is None:
+                self._log.warn(f'[solve_ik] [{arm.value}] compute_ik_async returned None')
+                return None
+
+            deadline = time.time() + _IK_TIMEOUT
+            while not future.done():
+                if time.time() > deadline:
+                    self._log.error(f'[solve_ik] [{arm.value}] IK timeout after {_IK_TIMEOUT}s')
+                    return None
+                time.sleep(0.05)
+
+            result = moveit2.get_compute_ik_result(future)
+            if result is None or len(result.name) == 0:
+                self._log.warn(f'[solve_ik] [{arm.value}] IK failed — no solution')
+                return None
+
+            name_to_pos = dict(zip(result.name, result.position))
+            joint_names = _ARM_JOINTS[arm]
+            if not all(n in name_to_pos for n in joint_names):
+                self._log.error(f'[solve_ik] [{arm.value}] IK result missing expected joints')
+                return None
+
+            joints = [name_to_pos[n] for n in joint_names]
+            joints_str = ', '.join(f'{v:.6f}' for v in joints)
+            self._log.info(f'[solve_ik] [{arm.value}] [{joints_str}]')
+            return joints
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

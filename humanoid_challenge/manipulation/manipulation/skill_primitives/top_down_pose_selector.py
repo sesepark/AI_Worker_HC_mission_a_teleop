@@ -58,9 +58,9 @@ _DEFAULT_SELECTION_CFG = {
     'hard_time_budget_s': 15.0,
     'plan_timeout_s': 5.0,
     'workspace_bounds': {
-        'x': [0.03, 0.40],
-        'y': [-0.55, 0.55],
-        'z': [0.50, 1.10],
+        'x': [0.03, 0.5],
+        'y': [-0.58, 0.55],
+        'z': [0.50, 1.30],
     },
     'orientation_filter': {
         'enabled': True,
@@ -156,23 +156,17 @@ class TopDownPoseSelector:
         self,
         center_pose: Pose,
         fixed_arm: Arm | None = None,
-        grasp_y_offset: float = -0.03,
-        # TODO: yaw_deg — 시뮬에서 0 vs 90 테스트 후 결정.
-        #   0   → 집게가 앞뒤 방향 (손등이 옆을 향함)
-        #   90  → 집게가 좌우 방향 (손등이 앞을 향함)
-        # 결정되면 config yaml로 빼고 이 파라미터 제거.
-        yaw_deg: float = 0.0,
+        grasp_y_offset: float = -0.045,
     ) -> MotionSelection | None:
-        """Select a top-down grasp from a single center pose published by perception.
+        """Select a grasp from a single center pose published by perception.
 
         Parameters
         ----------
         center_pose    : Object center pose in base_link frame.
+                         orientation 은 center_pose 그대로 사용 (기본 identity quat).
         fixed_arm      : If specified, only try this arm; otherwise try both.
         grasp_y_offset : Y offset from object center to actual grasp point (metres).
                          Nuts are not grasped at center — offset ~3 cm to the side.
-                         Sign (left/right) to be confirmed in simulation.
-        yaw_deg        : See TODO above.
         """
         self.last_failure_reason = ''
         self.last_rejections = Counter()
@@ -186,7 +180,7 @@ class TopDownPoseSelector:
         start = time.monotonic()
         budget = float(self._cfg['normal_time_budget_s'])
 
-        grasp_pose = self._normalize_to_topdown(center_pose, yaw_deg=yaw_deg)
+        grasp_pose = copy_pose(center_pose)
         grasp_pose.position.y += grasp_y_offset
 
         if not self._within_workspace(grasp_pose):
