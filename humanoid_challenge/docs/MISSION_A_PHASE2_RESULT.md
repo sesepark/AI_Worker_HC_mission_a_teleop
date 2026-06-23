@@ -69,21 +69,35 @@ cd /ws && colcon build --symlink-install --packages-up-to mission && colcon buil
 ros2 run perception place_pose_valid_node --ros-args -p force_invalid:=true   # {"valid": false}
 ```
 ### 6.2 실 로봇(ai_worker + humanoid_challenge, 동일 DDS 도메인) — G-T1/G-T2/G-FINAL
+> ⚠️ **카메라 단일 소유 (FIX-4)**: wrist 카메라(`camera_right`, serial 335122270229)는 **한 프로세스만**
+> bringup 해야 한다. `ffw_sg2_follower_ai` 와 `ffw_sg2_ai` 를 **동시에 띄우면 camera_right USB 충돌**
+> (`RS2_USB_STATUS_BUSY` / `failed to set power state` / `device NOT found`). 또한 `ffw_sg2_ai` 는 leader(텔레옵)
+> bringup 으로 `robot_description`/leader 컨트롤러를 요구 → **자율(FSM) Mission A 엔 불필요**. 아래는 follower 가
+> 로봇/컨트롤러만 담당하고 카메라는 **별도 camera-only 1개 프로세스**로 올리는 구성(권고).
 ```bash
 # 공통 env(양 컨테이너): ROS_DOMAIN_ID=30; ROS_LOCALHOST_ONLY=0; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-# [ai_worker] 로봇/MoveIt + 실 manip 서버
+# [ai_worker] 로봇/MoveIt + 실 manip 서버  (※ 이 bringup 이 camera_right 를 올린다면 아래 카메라 단계 생략)
 ros2 launch ffw_bringup ffw_sg2_follower_ai.launch.py
 ros2 launch ffw_moveit_config moveit.launch.py
 # (manipulation/mission/mission_interfaces 를 ai_worker ws 에 빌드 후)
-ros2 launch manipulation mission_a_manip.launch.py            # 실 manip 서버(T1)
-ros2 action list | grep move_to_scan_pose                     # G-T1: 실 노드 노출
-# [로봇] wrist 카메라 bringup
-ros2 launch ffw_bringup ffw_sg2_ai.launch.py colorizer.enable1:=false colorizer.enable2:=false
+ros2 launch manipulation mission_a_manip.launch.py            # 실 manip 서버(T1, 단일 executor)
+ros2 action list | grep move_to_scan_pose                     # G-T1: 실 노드 노출(연속 10회 재기동 생존 확인)
+# [로봇] wrist 카메라 — camera_right 를 단 1개 프로세스로만. ffw_sg2_ai(leader) 와 동시 기동 금지.
+#   realsense camera-only 권고(USB 안정화): initial_reset:=true + USB3 포트 + 필요 시 FPS/해상도 하향.
+#   (follower_ai 가 이미 camera_right 를 올리면 이 단계를 띄우지 말 것 — 충돌 방지)
+ros2 launch realsense2_camera rs_launch.py camera_name:=camera_right serial_no:=_335122270229 initial_reset:=true
+ros2 topic hz /camera_right/camera_right/color/image_rect_raw  # 안정 Hz 확인(크로스 컨테이너 DDS 통과)
 # [humanoid_challenge] 실 perception + mission_a(nav=stub)
+#   실 카메라가 camera_right_link TF 를 게시하면 perception_live 의 static TF 비활성:
 ros2 launch mission mission_a_real.launch.py mock_monitor_ocr:=true        # G-FINAL
-#   C3 활성: ... use_place_pose_check:=true   (perception_live place_pose_valid 제공)
+#   C3 활성:           ... use_place_pose_check:=true   (perception_live place_pose_valid 제공)
+#   카메라 TF 중복 시:  ... (perception_live 단독 기동 시 publish_camera_tf:=false)
+ros2 topic echo /detections --once                            # G-T2: 실 wrist 검출 유입 확인
 # 게이트 안전: C2 드롭/C3 무효·플랩 시 적재 0 (실 환경 확인)
+# 다사이클: manip 서버 재기동 없이 mission_a_real 연속 3회 → 매회 move_to_scan_pose success=True (FIX-1/2 회귀)
 ```
+> 참고(FIX-6, 인지용): follower bringup 의 Dynamixel `BULK_READ_FAIL`/실시간 오버런·lidar 종료 `-6` 은
+> ai_worker 벤더(드라이버/HW) 영역 — 본 레포 변경 대상 아님. baud/USB latency·전원·async 트리거 주기 점검 권고.
 
 ## 7. 수용/무회귀 요약
 - ✅ G-T3(서비스 remap + topic 무회귀), 헤드리스 mock 경로 무회귀(s0=3, s1=5, RECOVERY 0), place_pose_valid C3 계약.

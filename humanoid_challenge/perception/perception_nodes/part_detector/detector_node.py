@@ -231,7 +231,8 @@ def main(args=None) -> None:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():            # launch SIGINT 시 rclpy.shutdown 이 이미 호출됐을 수 있음(이중 호출 방지)
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
