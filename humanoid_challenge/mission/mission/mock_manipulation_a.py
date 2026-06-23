@@ -15,7 +15,6 @@ carry 자세는 manipulation 내부 로직 — 본 mock 은 carry 명령(SetCarr
 """
 from __future__ import annotations
 
-import json
 import time
 
 import rclpy
@@ -27,6 +26,7 @@ from std_msgs.msg import String
 
 from mission.task_list import TaskList
 from mission_interfaces.action import MoveToScanPose
+from mission_interfaces.srv import GetTaskList
 
 
 class MockManipulationA(Node):
@@ -49,8 +49,10 @@ class MockManipulationA(Node):
             String, '/attach_cmd', self._on_attach, 10, callback_group=cbg)
         self.sub_detach = self.create_subscription(
             String, '/detach_cmd', self._on_detach, 10, callback_group=cbg)
+        # /perception/task_list = GetTaskList.Response (통합 타입드 계약). class 미러 빌드용.
         self.sub_task = self.create_subscription(
-            String, '/perception/task_list', self._on_task, 10, callback_group=cbg)
+            GetTaskList.Response, '/perception/task_list', self._on_task, 10,
+            callback_group=cbg)
 
         self._mirror = TaskList()
         self._current: str | None = None
@@ -68,17 +70,10 @@ class MockManipulationA(Node):
     def _pub_manip(self) -> None:
         self.pub_manip.publish(String(data='IDLE'))
 
-    def _on_task(self, msg: String) -> None:
+    def _on_task(self, msg: GetTaskList.Response) -> None:
         if not self._mirror.is_empty():
             return
-        try:
-            data = json.loads(msg.data)
-        except Exception:
-            return
-        parts = [
-            {'name': i.get('name', ''), 'count': i.get('count', 0)}
-            for i in data.get('parts', []) if isinstance(i, dict)
-        ]
+        parts = [{'name': item.name, 'count': item.count} for item in msg.parts]
         self._mirror.build_from_ocr_parts(parts)
         if not self._mirror.is_empty():
             self.get_logger().info(f'[mock_manip] task 미러 빌드: {self._mirror}')
