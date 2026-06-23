@@ -40,9 +40,14 @@ class SimDriver:
         self.pub_attached = node.create_publisher(String, '/attached_object', 10)
         self.srv_task_list = node.create_service(
             GetTaskList, node.task_list_service_name, self._handle_task_list)
+        # SDR v2.3: 해제는 FSM 의 A3_PLACE 게이트 통과(/detach_cmd) 후에만 주입한다.
+        #   (state==A3_PLACE 즉시 주입 시 게이트 발행 전 ''→false-RECOVERY 경쟁 발생)
+        self.sub_detach = node.create_subscription(
+            String, '/detach_cmd', self._on_detach_cmd, 10)
 
         self._remaining = dict(SIM_INITIAL)   # 내부 잔여 (canonical)
         self._picked: str | None = None       # 이번 사이클에 집은 canonical 부품
+        self._release_done: bool = False       # 이번 파지의 해제 주입 완료 여부
         self._last_action: str | None = None
         self._timer = node.create_timer(period_sec, self._drive)
         node.get_logger().warn(
@@ -96,15 +101,21 @@ class SimDriver:
                 # 잔여가 있는 canonical 부품 1개 선택
                 self._picked = next(
                     (c for c in CANONICAL_PARTS if self._remaining.get(c, 0) > 0), 'hex nut')
+                self._release_done = False
                 cls = CANON_TO_CLASS[self._picked]
                 self.pub_attached.publish(String(data=cls))
                 n.get_logger().info(f'[SIM] /attached_object={cls} 주입 (파지)')
 
-        elif st == S.A3_PLACE:
-            if n.last_attached_object and self._once(f'place:{n.cycle}'):
-                self.pub_attached.publish(String(data=''))
-                if self._picked and self._remaining.get(self._picked, 0) > 0:
-                    self._remaining[self._picked] -= 1
-                total = sum(self._remaining.values())
-                n.get_logger().info(
-                    f'[SIM] /attached_object="" 주입 (잔여 {total})')
+        # 해제(/attached_object="")는 A3_PLACE state 가 아니라 /detach_cmd 수신 시 주입.
+        #   → _on_detach_cmd 참조.
+
+    def _on_detach_cmd(self, msg) -> None:
+        """FSM A3_PLACE 게이트 통과(/detach_cmd) 후에만 해제 주입."""
+        if self._picked and not self._release_done:
+            self.pub_attached.publish(String(data=''))
+            if self._remaining.get(self._picked, 0) > 0:
+                self._remaining[self._picked] -= 1
+            self._release_done = True
+            total = sum(self._remaining.values())
+            self._node.get_logger().info(
+                f'[SIM] /detach_cmd 수신 → /attached_object="" 주입 (잔여 {total})')

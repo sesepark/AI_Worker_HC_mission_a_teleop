@@ -1,0 +1,14 @@
+# MoveBaseLateral — 모바일 베이스를 측방(좌/우)으로 dead-reckon strafe 이동.
+# 미션 A: 박스(우) <-> 트레이(좌) 중심 간 675mm.
+# "방향+거리 전달 → 이동 → 성공 반환"의 request/response 성격이라 Service 로 정의한다.
+# (Action 의 다중 엔드포인트가 통합 디스커버리 병목을 유발해 Service 로 단순화 — SDR v2.3)
+# carry 자세는 manipulation 내부 로직이며 본 서비스와 무관(FSM 은 base 이동만).
+#
+# Request
+string direction          # "left" | "right"
+float32 distance_mm       # 예: 675.0
+---
+# Response
+bool arrived
+float32 lateral_error_mm  # 부호 있는 잔차(도착 오차); mock 은 작은 값 반환
+string message
