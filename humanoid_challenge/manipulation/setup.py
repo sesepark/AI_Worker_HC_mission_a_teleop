@@ -35,6 +35,7 @@ setup(
             'test_place               = manipulation.tests.test_place:main',
             'test_move_to_capture_pose   = manipulation.tests.test_move_to_capture_pose:main',
             'test_pick_no_selector       = manipulation.tests.test_pick_no_selector:main',
+            'test_pick_with_perception   = manipulation.tests.test_pick_with_perception:main',
             'test_lift                   = manipulation.tests.test_lift:main',
             'test_dual_box               = manipulation.tests.test_dual_box:main',
             'test_compute_capture_pose  = manipulation.tests.test_compute_capture_pose:main',
