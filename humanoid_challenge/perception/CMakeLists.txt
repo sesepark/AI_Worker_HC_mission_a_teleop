@@ -43,6 +43,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
   RENAME monitor_ocr_viewer
 )
+install(PROGRAMS
+  perception_nodes/place_validity/place_pose_valid_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME place_pose_valid_node
+)
 
 install(DIRECTORY
   launch
