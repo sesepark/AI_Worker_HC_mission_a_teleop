@@ -13,6 +13,10 @@
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>moveit_msgs</depend>
+  <!-- Mission A 실 서버(T1): FSM 계약 인터페이스 + task_list 미러 -->
+  <depend>mission_interfaces</depend>
+  <exec_depend>mission</exec_depend>
+  <depend>std_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -1,4 +1,5 @@
 from setuptools import find_packages, setup
+from glob import glob
 
 package_name = 'manipulation'
 
@@ -12,17 +13,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/data',
             ['manipulation/data/object_lut.json']),
-        ('share/' + package_name + '/config', [
-            'config/zone_a.yaml',
-            'config/desk.yaml',
-            'config/poses.yaml',
         ('share/' + package_name + '/config',
-        glob('manipulation/config/zone_b.yaml')),  
-        ('share/' + package_name + '/config',
-        glob('manipulation/config/zone_b_pick.yaml')), 
-        ('share/' + package_name + '/config',
-        glob('manipulation/config/zone_b_place.yaml')),   
-        ]),
+            glob('config/*.yaml') + glob('manipulation/config/*.yaml')),
+        ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -32,6 +25,8 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
+            # Mission A 실 manipulation 서버 (mock_manipulation_a drop-in 대체, T1)
+            'mission_a_manipulation_server = manipulation.mission_a_manipulation_server:main',
             'test_zone_a       = manipulation.tests.test_zone_a:main',
             'test_pick         = manipulation.tests.test_pick:main',
 
