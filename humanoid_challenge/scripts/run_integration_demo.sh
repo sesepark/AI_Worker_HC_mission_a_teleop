@@ -14,8 +14,10 @@ export ROS_DOMAIN_ID="$DOMAIN"
 export ROS_LOCALHOST_ONLY=1
 export PYTHONUNBUFFERED=1
 
+set +u
 source /opt/ros/jazzy/setup.bash
 source /ws/install/setup.bash 2>/dev/null || true
+set -u
 
 cleanup() {
   pkill -9 -f "[l]ib/mission/mission_a" 2>/dev/null || true
@@ -28,7 +30,7 @@ cleanup() {
 do_build() {
   echo "### build (--packages-up-to mission)"
   ( cd /ws && colcon build --symlink-install --packages-up-to mission ) || exit 1
-  source /ws/install/setup.bash
+  set +u; source /ws/install/setup.bash; set -u
 }
 
 # 단계0: sim 무회귀 (SimDriver, 신규 액션/서비스 우회) — 기대 DONE 적재 3

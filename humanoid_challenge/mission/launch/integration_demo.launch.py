@@ -28,8 +28,13 @@ def generate_launch_description() -> LaunchDescription:
     mission_launch = os.path.join(
         get_package_share_directory('mission'), 'launch', 'mission_a.launch.py')
 
+    lc = LaunchConfiguration
     return LaunchDescription([
         DeclareLaunchArgument('nav_mode', default_value='stub'),
+        # T3: 서비스 경로 검증용 패스스루(기본 topic 경로 무영향).
+        DeclareLaunchArgument('use_task_list_service', default_value='false'),
+        DeclareLaunchArgument('task_list_service_name', default_value='/mission_a/task_list'),
+        DeclareLaunchArgument('task_list_topic', default_value='/perception/task_list'),
         # 실 perception task_list (mock OCR, tray detection off — 카메라/모델 불필요)
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(perception_launch),
@@ -43,8 +48,11 @@ def generate_launch_description() -> LaunchDescription:
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(mission_launch),
             launch_arguments={
-                'nav_mode': LaunchConfiguration('nav_mode'),
+                'nav_mode': lc('nav_mode'),
                 'mock_pub_task_list': 'false',
+                'use_task_list_service': lc('use_task_list_service'),
+                'task_list_service_name': lc('task_list_service_name'),
+                'task_list_topic': lc('task_list_topic'),
             }.items(),
         ),
     ])
