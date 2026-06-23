@@ -42,6 +42,9 @@ class MockPerceptionA(Node):
         self.target_x = float(self.declare_parameter('target_x', 0.5).value)
         self.target_y = float(self.declare_parameter('target_y', 0.0).value)
         self.target_z = float(self.declare_parameter('target_z', 0.3).value)
+        # G5: 실 perception(tray_manage_node)이 task_list 를 제공할 때는 False 로 끄고
+        #   mock 은 wrist target/place_pose_valid 만 제공(토픽 중복 방지).
+        self.pub_task_list = bool(self.declare_parameter('pub_task_list', True).value)
 
         if parts_json.strip():
             try:
@@ -60,7 +63,8 @@ class MockPerceptionA(Node):
         self.pub_place = self.create_publisher(String, '/perception/place_pose_valid', 10)
 
         self._flap = False
-        self.create_timer(0.5, self._pub_task, callback_group=cbg)
+        if self.pub_task_list:
+            self.create_timer(0.5, self._pub_task, callback_group=cbg)
         self.create_timer(0.5, self._pub_target, callback_group=cbg)
         self.create_timer(0.2, self._pub_place, callback_group=cbg)
         total = sum(int(p.get('count', 0)) for p in self._parts)

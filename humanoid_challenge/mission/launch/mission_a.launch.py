@@ -44,6 +44,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('place_pose_invalid', default_value='false'),
         DeclareLaunchArgument('place_pose_flap', default_value='false'),
         DeclareLaunchArgument('parts_json', default_value=''),
+        DeclareLaunchArgument('mock_pub_task_list', default_value='true',
+                              description='실 perception(tray_manage_node) task_list 사용 시 false'),
     ]
 
     lc = LaunchConfiguration
@@ -90,6 +92,7 @@ def generate_launch_description() -> LaunchDescription:
             'place_pose_invalid': lc('place_pose_invalid'),
             'place_pose_flap': lc('place_pose_flap'),
             'parts_json': lc('parts_json'),
+            'pub_task_list': lc('mock_pub_task_list'),
         }],
     )
 
