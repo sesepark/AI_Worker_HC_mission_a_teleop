@@ -1,0 +1,62 @@
+# Zone B Pick 환경 수치 - box x offset matched to place landing_marker x offset
+# 목적:
+#   place 환경에서 로봇 base_link 중심 x=0과 landing_marker 중심 x의 차이를,
+#   pick 환경에서 로봇 base_link 중심 x=0과 box 중심 x의 차이와 같게 맞춘 버전입니다.
+#
+# 기준:
+#   place landing_marker center_x = 0.650
+#   robot base_link center_x      = 0.000
+#   목표 x 차이                  = 0.650
+#
+# 기존 pick box center_x = 0.350
+# 필요한 x 이동량       = +0.300 m
+#
+# 적용한 변환:
+#   x_new = x_pick_old + 0.300
+#   y_new = y_pick_old
+#   z 값과 각 물체 크기는 변경하지 않음
+#
+# 좌표축:
+#   +x: 로봇 정면
+#   +y: 로봇 좌측
+#   +z: 위
+#
+zone_b:
+  conveyor:
+    length: 3.0
+    depth: 0.4
+    height: 0.6
+    center_x: 0.65
+    center_y: 0.0
+
+  box:
+    width: 0.41
+    depth: 0.31
+    height: 0.28
+    mass_kg: 1.0
+    center_x: 0.65
+    center_y: 0.0
+
+  dest_table:
+    width: 1.6
+    depth: 0.8
+    height: 0.8
+    top_thickness: 0.02
+    leg_size: 0.05
+    leg_inset: 0.025
+    center_x: 0.65
+    center_y: -3.8
+
+  landing_marker:
+    size_x: 0.4
+    size_y: 0.5
+    thickness: 0.005
+    center_x: 0.55
+    center_y: -3.8
+
+  stop_line:
+    length: 1.6
+    thickness: 0.05
+    height: 0.005
+    center_x: 0.1
+    center_y: -3.8
