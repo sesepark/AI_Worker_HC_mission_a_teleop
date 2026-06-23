@@ -68,32 +68,42 @@ cd /ws && colcon build --symlink-install --packages-up-to mission && colcon buil
 # place_pose_valid(C3) 확인
 ros2 run perception place_pose_valid_node --ros-args -p force_invalid:=true   # {"valid": false}
 ```
-### 6.2 실 로봇(ai_worker + humanoid_challenge, 동일 DDS 도메인) — G-T1/G-T2/G-FINAL
-> ⚠️ **카메라 단일 소유 (FIX-4)**: wrist 카메라(`camera_right`, serial 335122270229)는 **한 프로세스만**
-> bringup 해야 한다. `ffw_sg2_follower_ai` 와 `ffw_sg2_ai` 를 **동시에 띄우면 camera_right USB 충돌**
-> (`RS2_USB_STATUS_BUSY` / `failed to set power state` / `device NOT found`). 또한 `ffw_sg2_ai` 는 leader(텔레옵)
-> bringup 으로 `robot_description`/leader 컨트롤러를 요구 → **자율(FSM) Mission A 엔 불필요**. 아래는 follower 가
-> 로봇/컨트롤러만 담당하고 카메라는 **별도 camera-only 1개 프로세스**로 올리는 구성(권고).
+### 6.2 실 로봇(robot PC + humanoid_challenge 데스크톱, 동일 DDS 도메인) — G-T1/G-T2/G-FINAL
+> ✅ **G-T2 LIVE 검증 완료(2026-06-24)** — robot PC(`ffw-...`) bringup + 데스크톱(`humanoid_challenge`, domain 30)
+> 에서 perception 전 구간 동작 확인: detector `flange_nut conf=0.96`, depth `16UC1` 스트림 ~4.4Hz,
+> `/perception/wrist/target_one_pose` = base_link(0.103,-0.216,0.372)m, `/perception/place_pose_valid` 실 TF 판정.
+>
+> **핵심 근본원인 2가지(반드시 반영)**:
+> 1. **colorizer 끄기** — bringup 기본은 depth 를 **colorized `rgb8`** 로 발행 → (a) metric 아님(3D 투영 불가),
+>    (b) 용량 커서 **네트워크로 안 넘어옴**(데스크톱에서 depth 0프레임). `colorizer.enable1:=false
+>    colorizer.enable2:=false` 로 끄면 depth=`16UC1` 가 되고 **그제서야 cross-PC 스트림됨**(~4.4Hz).
+> 2. **perception_live 의 static TF 필수** — 로봇 TF 트리는 `base_link→…→camera_r_link` 와 realsense 의
+>    `camera_right_link→camera_right_color_optical_frame` 가 **끊겨 있음**. `perception_live` 가 발행하는
+>    `camera_r_link→camera_right_link`(identity) 가 둘을 잇는다 → **`publish_camera_tf:=true` 유지(기본)**.
+>    (이게 없으면 wrist 노드가 `tf_failed` 로 target 미발행.)
+>
+> ⚠️ 카메라 단일 소유(FIX-4): `ffw_sg2_follower_ai` 가 camera_right 를 올리므로 **별도 카메라 launch 금지**
+> (`ffw_sg2_ai` 등과 동시 기동 시 camera_right USB 충돌 `RS2_USB_STATUS_BUSY`).
 ```bash
-# 공통 env(양 컨테이너): ROS_DOMAIN_ID=30; ROS_LOCALHOST_ONLY=0; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-# [ai_worker] 로봇/MoveIt + 실 manip 서버  (※ 이 bringup 이 camera_right 를 올린다면 아래 카메라 단계 생략)
-ros2 launch ffw_bringup ffw_sg2_follower_ai.launch.py
+# 공통 env(양쪽 동일): ROS_DOMAIN_ID=30; ROS_LOCALHOST_ONLY=0; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+# [robot PC] 로봇/컨트롤러 + camera_right (colorizer 끄기 필수! tf_publish_rate 로 TF 부하 완화)
+ros2 launch ffw_bringup ffw_sg2_follower_ai.launch.py \
+     colorizer.enable1:=false colorizer.enable2:=false tf_publish_rate1:=10.0 tf_publish_rate2:=10.0
 ros2 launch ffw_moveit_config moveit.launch.py
-# (manipulation/mission/mission_interfaces 를 ai_worker ws 에 빌드 후)
-ros2 launch manipulation mission_a_manip.launch.py            # 실 manip 서버(T1, 단일 executor)
-ros2 action list | grep move_to_scan_pose                     # G-T1: 실 노드 노출(연속 10회 재기동 생존 확인)
-# [로봇] wrist 카메라 — camera_right 를 단 1개 프로세스로만. ffw_sg2_ai(leader) 와 동시 기동 금지.
-#   realsense camera-only 권고(USB 안정화): initial_reset:=true + USB3 포트 + 필요 시 FPS/해상도 하향.
-#   (follower_ai 가 이미 camera_right 를 올리면 이 단계를 띄우지 말 것 — 충돌 방지)
-ros2 launch realsense2_camera rs_launch.py camera_name:=camera_right serial_no:=_335122270229 initial_reset:=true
-ros2 topic hz /camera_right/camera_right/color/image_rect_raw  # 안정 Hz 확인(크로스 컨테이너 DDS 통과)
-# [humanoid_challenge] 실 perception + mission_a(nav=stub)
-#   실 카메라가 camera_right_link TF 를 게시하면 perception_live 의 static TF 비활성:
+ros2 topic echo /camera_right/camera_right/depth/image_rect_raw --field encoding --once   # 반드시 16UC1
+# [robot PC] 실 manip 서버 (manipulation/mission/mission_interfaces 를 robot ws 에 빌드 후; 단일 executor)
+ros2 launch manipulation mission_a_manip.launch.py
+ros2 action list | grep move_to_scan_pose                     # G-T1: 실 노드 노출(연속 10회 재기동 생존)
+# [데스크톱 humanoid_challenge] 실 perception + mission_a(nav=stub).  publish_camera_tf 기본 true 유지.
 ros2 launch mission mission_a_real.launch.py mock_monitor_ocr:=true        # G-FINAL
-#   C3 활성:           ... use_place_pose_check:=true   (perception_live place_pose_valid 제공)
-#   카메라 TF 중복 시:  ... (perception_live 단독 기동 시 publish_camera_tf:=false)
-ros2 topic echo /detections --once                            # G-T2: 실 wrist 검출 유입 확인
+#   C3 활성: ... use_place_pose_check:=true
+# G-T2 확인(데스크톱):
+ros2 topic hz /camera_right/camera_right/depth/image_rect_raw  # 16UC1 스트림(~4Hz 이상)
+ros2 topic echo /detections --once                            # 부품 검출 유입(부품을 wrist FOV 에 둘 것)
+ros2 topic echo /perception/wrist/target_one_pose --once      # base_link 3D target 발행
 # 게이트 안전: C2 드롭/C3 무효·플랩 시 적재 0 (실 환경 확인)
+# 참고: depth/color 가 네트워크로 ~4Hz 로 throttle 됨. RGB-D sync 가 흔들리면
+#   config/wrist_projection/params.yaml 의 sync_slop 을 0.10→0.2~0.3 으로 상향.
 # 다사이클: manip 서버 재기동 없이 mission_a_real 연속 3회 → 매회 move_to_scan_pose success=True (FIX-1/2 회귀)
 ```
 > 참고(FIX-6, 인지용): follower bringup 의 Dynamixel `BULK_READ_FAIL`/실시간 오버런·lidar 종료 `-6` 은
