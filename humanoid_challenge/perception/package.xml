@@ -3,7 +3,7 @@
 <package format="3">
   <name>perception</name>
   <version>0.1.0</version>
-  <description>Unified perception package for monitor OCR, part detection, 2D-to-3D projection, and tray occupancy primitives.</description>
+  <description>Unified Mission A perception package for monitor OCR, part detection, tray task management, and wrist grasp target planning.</description>
   <maintainer email="dev@example.com">perception</maintainer>
   <license>MIT</license>
 

@@ -11,7 +11,6 @@ Reference: humanoid_challenge/docs/MISSION_A_SCENARIO_PLAN.md "mission_a.py 초�
 """
 from __future__ import annotations
 
-import json
 from enum import Enum, auto
 
 import rclpy
@@ -82,7 +81,7 @@ class MissionA(Node):
             self.declare_parameter('task_list_service_timeout_sec', float(TIMEOUT_A1_OCR)).value)
         self.task_list_service_frame_count = int(
             self.declare_parameter('task_list_service_frame_count', 3).value)
-        # 검증된 토픽 파이프라인: management_node → /perception/task_list (std_msgs/String JSON).
+        # 검증된 토픽 파이프라인: tray_manage_node → /perception/task_list (GetTaskList.Response).
         self.task_list_topic = str(
             self.declare_parameter('task_list_topic', '/perception/task_list').value)
         # 기본은 토픽 구독. True 면 (구) GetTaskList 서비스 능동요청 경로 병행.
@@ -103,9 +102,9 @@ class MissionA(Node):
             self._on_target_pose, 10)
         self.sub_attached_object = self.create_subscription(
             String, '/attached_object', self._on_attached_object, 10)
-        # task list 입력 = management_node 토픽(검증된 파이프라인).
+        # task list 입력 = tray_manage_node 토픽(검증된 파이프라인).
         self.sub_task_list = self.create_subscription(
-            String, self.task_list_topic, self._on_task_list, 10)
+            GetTaskList.Response, self.task_list_topic, self._on_task_list, 10)
 
         # --- Service clients (보존: use_task_list_service=True 시 병행 사용) ---
         self.task_list_client = self.create_client(
@@ -131,7 +130,7 @@ class MissionA(Node):
         self.last_target_pose: PoseStamped | None = None
         self.last_attached_object: str | None = None
         # /perception/task_list 토픽 최신 스냅샷 (VERIFY 교차확인용)
-        self.last_task_list_payload: dict | None = None
+        self.last_task_list_response: GetTaskList.Response | None = None
         self._last_topic_remaining: int | None = None
 
         # 미션 진행 상태
@@ -184,34 +183,26 @@ class MissionA(Node):
         self.last_attached_object = msg.data
         self.get_logger().debug(f'[sub] /attached_object = "{msg.data}"')
 
-    def _on_task_list(self, msg: String) -> None:
-        """management_node /perception/task_list (String JSON) 구독.
+    def _on_task_list(self, msg: GetTaskList.Response) -> None:
+        """tray_manage_node /perception/task_list (GetTaskList.Response) 구독.
 
-        JSON: {"parts": [{"name": "flange nut", "count": 1}, ...], ...}
         - INIT/A1_MONITOR 단계에서만 목표 task_list 를 (재)빌드한다.
           (A2 이후의 자체 차감 상태를 토픽이 덮어쓰지 않도록 보호)
         - 모든 단계에서 토픽 잔량 스냅샷은 VERIFY 교차확인용으로 갱신.
         """
-        try:
-            data = json.loads(msg.data)
-        except Exception as exc:
-            self.get_logger().warn(
-                f'Failed to parse {self.task_list_topic} JSON: {exc}')
-            return
-
         parts = [
-            {'name': item.get('name', ''), 'count': item.get('count', 0)}
-            for item in data.get('parts', [])
-            if isinstance(item, dict)
+            {'name': item.name, 'count': item.count}
+            for item in msg.parts
         ]
-        self.last_task_list_payload = data
+        self.last_task_list_response = msg
         self._last_topic_remaining = sum(
             max(int(p.get('count', 0) or 0), 0) for p in parts)
 
         if self.state in (State.INIT, State.A1_MONITOR):
             self.task_list.build_from_ocr_parts(parts)
             self.get_logger().debug(
-                f'[sub] {self.task_list_topic} -> {self.task_list}')
+                f'[sub] {self.task_list_topic} -> {self.task_list} '
+                f'(frames={msg.frames_used}, mission_complete={msg.success})')
 
     def _request_task_list_service(self) -> None:
         if self._task_list_service_inflight or self._now() < self._task_list_service_next_try_time:
@@ -247,7 +238,7 @@ class MissionA(Node):
             return
 
         self._task_list_service_next_try_time = self._now() + 2.0
-        if not response.success:
+        if not response.success and not response.parts:
             self.get_logger().warn(f'task_list service failed: {response.message}')
             return
 
@@ -258,7 +249,7 @@ class MissionA(Node):
         self.task_list.build_from_ocr_parts(parts)
         self.get_logger().info(
             f'[A1_MONITOR] task_list service result: {self.task_list} '
-            f'(frames={response.frames_used})')
+            f'(frames={response.frames_used}, mission_complete={response.success})')
 
     # ----------------------------------------------------------------------- #
     # State dispatch

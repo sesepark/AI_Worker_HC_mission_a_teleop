@@ -29,59 +29,19 @@ install(PROGRAMS
   RENAME monitor_ocr_node
 )
 install(PROGRAMS
-  perception_nodes/head_projection/projection_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME head_projection_node
-)
-install(PROGRAMS
-  perception_nodes/head_projection/pointcloud_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME head_pointcloud_node
-)
-install(PROGRAMS
-  perception_nodes/head_projection/grasp_pcd_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME head_grasp_pcd_node
-)
-install(PROGRAMS
-  perception_nodes/wrist_projection/wrist_projection_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME wrist_projection_node
-)
-install(PROGRAMS
-  perception_nodes/wrist_projection/wrist_pointcloud_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME wrist_pointcloud_node
-)
-install(PROGRAMS
-  perception_nodes/wrist_projection/wrist_grasp_pcd_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME wrist_grasp_pcd_node
-)
-install(PROGRAMS
   perception_nodes/wrist_projection/wrist_task_grasp_planner_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME wrist_task_grasp_planner_node
 )
 install(PROGRAMS
-  perception_nodes/tray_occupancy/tray_occupancy_node.py
+  perception_nodes/management/tray_manage_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME tray_occupancy_node
+  RENAME tray_manage_node
 )
 install(PROGRAMS
-  perception_nodes/tray_occupancy/tray_contents_node.py
+  perception_nodes/monitor_ocr/viewer_node.py
   DESTINATION lib/${PROJECT_NAME}
-  RENAME tray_contents_node
-)
-install(PROGRAMS
-  perception_nodes/management/management_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME management_node
-)
-install(PROGRAMS
-  perception_nodes/monitor_ocr/monitor_ocr_topic_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME monitor_ocr_topic_node
+  RENAME monitor_ocr_viewer
 )
 
 install(DIRECTORY

@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-ROS2 노드: 카메라 이미지 → 대시보드 OCR → task list 서비스 응답
+ROS2 노드: 카메라 이미지 → 대시보드 OCR → 결과 토픽 발행 + task list 서비스 응답
 
 Subscribe:
   /<image_topic>  (sensor_msgs/Image)
+
+Publish:
+  /monitor_ocr/result       (std_msgs/String) JSON 전체 결과
+  /monitor_ocr/parts        (std_msgs/String) parts 배열 JSON
+  /monitor_ocr/part_counts  (std_msgs/Int32MultiArray) 부품 count 배열
+  /monitor_ocr/recognized   (std_msgs/Bool) 화면 감지 + 모든 count 유효 여부
 
 Service:
   /mission_a/task_list  (mission_interfaces/srv/GetTaskList)
@@ -12,6 +18,7 @@ Parameters:
   image_topic      (str,   default='/zed/zed_node/rgb/image_rect_color')
   process_interval (float, default=2.0)  OCR 최소 주기 (초)
 """
+import json
 import threading
 import time
 
@@ -21,6 +28,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import Bool, Int32MultiArray, String
 from cv_bridge import CvBridge
 from perception_nodes.monitor_ocr.paddle_ocr import make_ocr
 
@@ -41,14 +49,22 @@ class MonitorOCRNode(Node):
         super().__init__('monitor_ocr_node')
 
         # 파라미터
-        self.declare_parameter('image_topic',      '/zed/zed_node/rgb/image_rect_color')
+        self.declare_parameter('image_topic', '/zed/zed_node/rgb/image_rect_color')
+        self.declare_parameter('result_topic', '/monitor_ocr/result')
+        self.declare_parameter('parts_topic', '/monitor_ocr/parts')
+        self.declare_parameter('part_counts_topic', '/monitor_ocr/part_counts')
+        self.declare_parameter('recognized_topic', '/monitor_ocr/recognized')
         self.declare_parameter('process_interval', 2.0)
         self.declare_parameter('task_list_service_name', '/mission_a/task_list')
         self.declare_parameter('task_list_service_timeout_sec', 20.0)
         self.declare_parameter('task_list_service_frame_count', 3)
 
-        image_topic           = self.get_parameter('image_topic').value
-        self.process_interval = self.get_parameter('process_interval').value
+        image_topic = str(self.get_parameter('image_topic').value)
+        result_topic = str(self.get_parameter('result_topic').value)
+        parts_topic = str(self.get_parameter('parts_topic').value)
+        part_counts_topic = str(self.get_parameter('part_counts_topic').value)
+        recognized_topic = str(self.get_parameter('recognized_topic').value)
+        self.process_interval = float(self.get_parameter('process_interval').value)
         self._task_list_service_name = self.get_parameter('task_list_service_name').value
         self._task_list_service_timeout_sec = float(
             self.get_parameter('task_list_service_timeout_sec').value)
@@ -96,6 +112,11 @@ class MonitorOCRNode(Node):
         self.get_logger().info(
             f'GetTaskList service ready: {self._task_list_service_name}')
 
+        self.pub_result = self.create_publisher(String, result_topic, 10)
+        self.pub_parts = self.create_publisher(String, parts_topic, 10)
+        self.pub_part_counts = self.create_publisher(Int32MultiArray, part_counts_topic, 10)
+        self.pub_recognized = self.create_publisher(Bool, recognized_topic, 10)
+
         # Subscriber (BEST_EFFORT: 드롭 허용, 항상 최신 프레임만)
         sub_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -108,6 +129,9 @@ class MonitorOCRNode(Node):
         self._ocr_thread.start()
 
         self.get_logger().info(f'구독 토픽: {image_topic}')
+        self.get_logger().info(
+            f'발행 토픽: {result_topic}, {parts_topic}, '
+            f'{part_counts_topic}, {recognized_topic}')
         self.get_logger().info(f'OCR 주기: {self.process_interval}s')
         self.get_logger().info('모드: 부품 수량 테이블')
 
@@ -118,10 +142,6 @@ class MonitorOCRNode(Node):
         now = time.time()
         with self._lock:
             force_next_frame = self._force_next_frame
-            should_process = self._task_list_request_active
-
-        if not should_process:
-            return
 
         if not force_next_frame and now - self._last_proc_time < self.process_interval:
             return
@@ -140,8 +160,6 @@ class MonitorOCRNode(Node):
             return
 
         with self._lock:
-            if not self._task_list_request_active:
-                return
             self._pending_img = img
             if force_next_frame:
                 self._force_next_frame = False
@@ -164,6 +182,7 @@ class MonitorOCRNode(Node):
                     with self._aggregator_lock:
                         result = self._aggregator.update(raw)
                     self._store_latest_result(result)
+                    self._publish_result(result)
                     parts_log = "  ".join(
                         f"{p['name']}:{p['count']}" for p in result['parts'])
                     self.get_logger().info(
@@ -181,6 +200,36 @@ class MonitorOCRNode(Node):
             self._latest_result = result
             self._latest_result_seq += 1
             self._result_condition.notify_all()
+
+    def _publish_result(self, result: dict) -> None:
+        out = String()
+        out.data = json.dumps(result, ensure_ascii=False, default=int)
+        self.pub_result.publish(out)
+
+        parts = result.get('parts', []) or []
+
+        parts_msg = String()
+        parts_msg.data = json.dumps(parts, ensure_ascii=False, default=int)
+        self.pub_parts.publish(parts_msg)
+
+        counts_msg = Int32MultiArray()
+        counts_msg.data = [
+            int(item.get('count', -1))
+            for item in parts
+            if isinstance(item, dict)
+        ]
+        self.pub_part_counts.publish(counts_msg)
+
+        recognized_msg = Bool()
+        recognized_msg.data = bool(
+            result.get('latest_screen_detected', False)
+            and parts
+            and all(
+                isinstance(item, dict) and int(item.get('count', -1)) >= 0
+                for item in parts
+            )
+        )
+        self.pub_recognized.publish(recognized_msg)
 
     @staticmethod
     def _parts_payload(result: dict) -> tuple[list[str], list[int]]:

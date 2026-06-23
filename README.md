@@ -13,7 +13,7 @@ ROBOTIS AI Worker 기반 휴머노이드 챌린지 통합 레포. Perception / M
 AI_Worker_HC/
 ├── ai_worker/              # ROBOTIS 공식 (로봇 bringup 등) — 수정 금지
 ├── humanoid_challenge/     # 휴머노이드 챌린지 Mission A 팀 개발 패키지
-│   ├── perception/                       # OCR / YOLO / 2D→3D / tray occupancy 통합 perception 패키지
+│   ├── perception/                       # OCR / YOLO / tray task / wrist target perception 패키지
 │   ├── mission_interfaces/               # Mission-Perception 서비스/메시지 인터페이스
 │   ├── manipulation/                     # MoveIt/GPD/pick-place primitives
 │   ├── mission/                          # System 팀 — Mission A 상태기계
@@ -29,17 +29,142 @@ AI_Worker_HC/
 
 ## 최근 정리 내용
 
-### 1) Perception 패키지 통합
-- `monitor_ocr`, 부품 YOLO, head/wrist 2D→3D projection, tray occupancy primitive를 `perception` 단일 ROS 패키지로 통합.
-- 내부 기능은 `perception_nodes/{monitor_ocr,part_detector,head_projection,wrist_projection,tray_occupancy}` 아래에 둔다.
-- task list와 tray detection은 토픽 누적 로직 대신 `mission_interfaces` 서비스로 mission 쪽에서 요청한다.
+### 1) Perception 패키지 정리
+- `humanoid_challenge/perception`에는 현재 Mission A 핵심 흐름에 필요한 실행 노드만 남겼다.
+- 남은 실행 노드:
+  - `monitor_ocr_node`
+  - `monitor_ocr_viewer`
+  - `detector_node`
+  - `tray_manage_node`
+  - `wrist_task_grasp_planner_node`
+- 삭제한 실행 노드/launch:
+  - head projection/pointcloud/grasp PCD 계열
+  - wrist projection/pointcloud/grasp PCD 계열
+  - legacy `monitor_ocr_topic_node`
+  - legacy `tray_occupancy.launch.py`
+  - perception 보조 수집 tools
+- 메시지는 통합 패키지의 `perception.msg.PartDetectionArray`를 사용하고, 기존 독립 패키지명(`perception_part_detector`, `perception_2d_to_pcd_wrist`, `task_management`) import는 사용하지 않는다.
 
-### 2) Mission 서비스 연동
-```
-/mission_a/task_list       # monitor OCR 결과 요청
-/mission_a/tray_detections # tray/part primitive detection 요청
-```
-→ perception은 primitive detection/OCR을 제공하고, 파싱·정규화·수량 관리는 mission 쪽에서 수행한다.
+### 2) robotis_ros2_ws perception 변경분 반영
+
+이 브랜치는 `hublemon/Humanoid-Challenge-Perception`의 `backup/current-work-20260622` 작업을 `snu-shape/AI_Worker_HC`의 `feature/mission-a` 구조에 맞춰 이식한 것이다. 별도 ROS 패키지를 추가하지 않고, `humanoid_challenge/perception` 단일 패키지 안에서 실행 파일과 launch만 연결했다.
+
+#### Monitor OCR 경로
+- 실행 노드: `perception_nodes/monitor_ocr/monitor_ocr_node.py`
+- 설치 실행명:
+  ```bash
+  ros2 run perception monitor_ocr_node
+  ```
+- launch 진입점:
+  ```bash
+  ros2 launch perception monitor_ocr.launch.py
+  ```
+- 입력:
+  - `/zed/zed_node/rgb/image_rect_color` (`sensor_msgs/Image`, 기본 OCR 입력)
+- 출력:
+  - `/monitor_ocr/result` (`std_msgs/String`, 전체 OCR JSON)
+  - `/monitor_ocr/parts` (`std_msgs/String`, parts 배열 JSON)
+  - `/monitor_ocr/part_counts` (`std_msgs/Int32MultiArray`, 부품 count 배열)
+  - `/monitor_ocr/recognized` (`std_msgs/Bool`, 화면 감지 + 모든 count 유효 여부)
+- 서비스:
+  - `/mission_a/task_list` (`mission_interfaces/srv/GetTaskList`, legacy service fallback)
+- 디버그 viewer:
+  ```bash
+  ros2 run perception monitor_ocr_viewer
+  ```
+
+#### Part detector 경로
+- 실행 노드: `perception_nodes/part_detector/detector_node.py`
+- launch 진입점:
+  ```bash
+  ros2 launch perception part_detector.launch.py camera_name:=wrist_right
+  ```
+- 출력:
+  - `/detections` (`perception/msg/PartDetectionArray`)
+  - `/detector_debug_image` (`sensor_msgs/Image`)
+
+#### Manipulation mock 경로
+- manipulation팀이 perception target topic만 바로 받아 테스트할 수 있도록 세 노드를 한 번에 띄우는 launch를 제공한다.
+- launch 진입점:
+  ```bash
+  ros2 launch perception manipulation_mock.launch.py
+  ```
+- 위 명령은 통합 전 아래 세 명령을 `perception` 단일 패키지 기준으로 묶은 것이다.
+  ```bash
+  ros2 launch perception part_detector.launch.py camera_name:=wrist_right
+  ros2 launch perception task_management.launch.py mock_monitor_ocr:=true
+  ros2 launch perception wrist_task_grasp_planner.launch.py
+  ```
+- 기본값:
+  - `detector_camera_name:=wrist_right`
+  - `mock_monitor_ocr:=true`
+  - `enable_tray_detection:=false`
+  - `weight_arm_proximity:=0.0`
+  - `temporal_smoothing_enable:=false`
+- mock launch는 기본적으로 tray YOLO를 로드하지 않는다. tray ROI까지 같이 확인하려면 `enable_tray_detection:=true`와 `tray_model_path:=...`를 넘긴다.
+- manipulation팀이 바로 보면 되는 출력:
+  - `/perception/wrist/target_one_pose`
+  - `/perception/wrist/target_one_detection`
+
+#### Task management 경로
+- 새 실행 노드: `perception_nodes/management/tray_manage_node.py`
+- 설치 실행명: `ros2 run perception tray_manage_node`
+- launch 진입점:
+  ```bash
+  ros2 launch perception task_management.launch.py
+  ```
+- 입력:
+  - `/monitor_ocr/result` (`std_msgs/String`, OCR JSON)
+  - `/camera_right/camera_right/color/image_rect_raw` (`sensor_msgs/Image`, tray YOLO 입력)
+- 출력:
+  - `/perception/task_list` (`mission_interfaces/srv/GetTaskList_Response`, typed task list state)
+  - `/perception/get_task_list` (`mission_interfaces/srv/GetTaskList`, latest task list service)
+  - `/perception/tray_roi` (`sensor_msgs/RegionOfInterest`, 최신 tray bbox)
+- `GetTaskList` 변환 규칙:
+  - `mission_complete` -> `success`
+  - `source` -> `message` (`source` dict를 JSON string으로 직렬화)
+  - `ocr_latest_screen_detected` -> `all_counts_recognized`
+  - `ocr_frames_used` -> `frames_used`
+  - `parts` -> `mission_interfaces/TaskItem[] parts`
+- 기존 String JSON `/perception/task_list`는 제거했고, `/perception/task_list`는 typed `GetTaskList_Response` topic으로 발행한다.
+- `GetTaskList` service 이름은 기본적으로 `/perception/get_task_list`이며, System FSM의 service fallback에 직접 연결하려면 `task_list_service_name:=/mission_a/task_list`로 override할 수 있다.
+- `mission_a`의 service fallback은 이 매핑을 반영해, `success=false`라도 `parts`가 있으면 task list를 반영한다. 여기서 `success`는 RPC 성공 여부가 아니라 `mission_complete` 상태다.
+- 모델 기본 경로:
+  - `humanoid_challenge/perception/model/tray_occupancy_best.pt`
+  - `TRAY_MODEL_PATH` 환경 변수 또는 `tray_model_path:=...` launch argument로 override 가능.
+- 이전 `management_node`, `tray_contents_node`, `tray_occupancy_node` 구현 파일은 제거했다. 잘못된 예전 파이프라인이 같이 떠서 `/perception/task_list`를 중복 발행하는 것을 막기 위한 정리다.
+
+#### Wrist grasp target 경로
+- 실행 노드: `perception_nodes/wrist_projection/wrist_task_grasp_planner_node.py`
+- 설치 실행명: `ros2 run perception wrist_task_grasp_planner_node`
+- launch 진입점:
+  ```bash
+  ros2 launch perception wrist_task_grasp_planner.launch.py
+  ```
+- `wrist_all.launch.py`도 현재는 최종 target planner만 실행한다.
+- 입력:
+  - `/detections` (`perception/msg/PartDetectionArray`)
+  - wrist RGB-D image/camera_info
+  - `/perception/task_list` (`mission_interfaces/srv/GetTaskList_Response`)
+- 출력:
+  - `/perception/wrist/target_one_pose` (`geometry_msgs/PoseStamped`, base_link 기준 최종 target)
+  - `/perception/wrist/target_one_detection` (`std_msgs/String`, 선택된 detection/bbox/score JSON)
+- scoring은 기존 화면 중심/마스크 품질 중심 로직 대신 `confidence + arm_reference proximity` 기준으로 바뀌었다.
+- 관련 파라미터는 `humanoid_challenge/perception/config/wrist_projection/params.yaml`의 `wrist_task_grasp_planner_node` 섹션에 있다.
+  - `out_target_detection_topic`
+  - `arm_reference_frame`
+  - `arm_reference_xyz`
+  - `max_arm_distance_m`
+  - `weight_confidence`
+  - `weight_arm_proximity`
+
+#### System 팀 영향
+- `mission_a`가 구독하는 task input 이름은 유지하되, 타입은 `std_msgs/String` JSON에서 `mission_interfaces/srv/GetTaskList_Response`로 변경했다.
+  - task input: `/perception/task_list`
+  - pick target: `/perception/wrist/target_one_pose`
+- 따라서 System 쪽 FSM은 topic 이름은 그대로 쓰되, subscriber 타입만 `GetTaskList.Response` 계약에 맞추면 된다.
+- 변경된 것은 `/perception/task_list`를 만드는 내부 구현이다. 예전 `tray_contents_node + management_node` 조합 대신 `tray_manage_node`가 OCR 결과와 tray image를 받아 task list를 직접 발행한다.
+- `use_task_list_service` 기반 OCR 서비스 fallback 코드는 남아 있으므로, topic pipeline이 준비되지 않은 상황에서도 기존 서비스 테스트 경로를 막지 않는다.
 
 ### 3) `mission_a` 구현
 - `humanoid_challenge/mission/` 를 ament_python 패키지 `mission` 으로 구성 → `ros2 run mission mission_a`.
@@ -80,7 +205,7 @@ tray 모델은 `TRAY_MODEL_PATH` 환경 변수나 `tray_model_path` launch argum
 ## 남은 작업
 - [ ] 실제 헤드 카메라 입력으로 monitor OCR 라이브 검증
 - [ ] 트레이 YOLO 모델 `tray_occupancy_best.pt` 배치
-- [ ] A3_PLACE용 트레이 base_link place 좌표 인터페이스 협의 (현재 tray_contents 는 2D 카운트만)
+- [ ] A3_PLACE용 트레이 base_link place 좌표 인터페이스 협의 (현재 perception은 `/perception/tray_roi` 2D ROI까지만 제공)
 - [ ] Phase 2 Manipulation 연동 (`bin_pick`/`tray_place` Action)
 - [ ] CM 토픽명(`/active_mission`, `/manipulator_state`, `/attached_object`) 전 팀 합의
 
