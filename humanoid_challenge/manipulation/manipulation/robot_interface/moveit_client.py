@@ -54,6 +54,18 @@ _PLANNING_ERROR_CODES = {
     MoveItErrorCodes.START_STATE_IN_COLLISION,
 }
 
+# Reverse lookup int -> name, built from the installed moveit_msgs constants (no hardcoding).
+# e.g. -10 -> 'START_STATE_IN_COLLISION', -31 -> 'NO_IK_SOLUTION', -1 -> 'PLANNING_FAILED'.
+_ERROR_CODE_NAMES = {
+    v: k for k, v in vars(MoveItErrorCodes).items()
+    if k.isupper() and isinstance(v, int)
+}
+
+
+def _error_name(val: int) -> str:
+    return _ERROR_CODE_NAMES.get(val, 'UNKNOWN')
+
+
 _JOINT_STATES_TIMEOUT  = 10.0
 _DEFAULT_PLANNING_TIME = float(os.environ.get('MOVEIT_PLANNING_TIME', '5.0'))
 _DEFAULT_PLANNING_ATTEMPTS = int(os.environ.get('MOVEIT_PLANNING_ATTEMPTS', '5'))
@@ -64,10 +76,24 @@ _IK_TIMEOUT = 5.0
 
 class MoveItClient:
 
-    def __init__(self, node: Node):
+    def __init__(self, node: Node, *, manage_executor: bool = True):
+        """MoveIt2 wrapper.
+
+        manage_executor=True (default, standalone/test usage): this client owns a
+        MultiThreadedExecutor in a daemon thread spinning `node`, and __init__ blocks
+        until move_group servers + joint states are ready.
+        manage_executor=False: the CALLER owns the (single) executor that spins `node`.
+        __init__ does NOT create an executor and does NOT block — the caller must spin
+        the node and then call `wait_until_ready()`. Use this when `node` is added to an
+        external executor (e.g. a long-running server) to avoid a node being spun by two
+        executors (which corrupts the action-client wait set: rcl_action action_client.c:659).
+        """
         self._node      = node
         self._log       = node.get_logger()
         self._destroyed = False
+        self._manage_executor = manage_executor
+        self._executor = None
+        self._executor_thread = None
 
         # ReentrantCallbackGroup allows action feedback and result callbacks
         # to fire concurrently inside the MultiThreadedExecutor.
@@ -129,16 +155,18 @@ class MoveItClient:
         # Executor runs in a daemon thread — all ROS2 callbacks (action results,
         # joint state updates, FK responses) are handled automatically without
         # the main thread ever calling spin_once.
-        self._executor = MultiThreadedExecutor()
-        self._executor.add_node(self._node)
-        self._executor_thread = threading.Thread(
-            target=self._executor.spin,
-            daemon=True,
-        )
-        self._executor_thread.start()
+        # When manage_executor=False the caller owns the single executor that spins
+        # this node, so we neither create our own nor block here (see wait_until_ready()).
+        if self._manage_executor:
+            self._executor = MultiThreadedExecutor()
+            self._executor.add_node(self._node)
+            self._executor_thread = threading.Thread(
+                target=self._executor.spin,
+                daemon=True,
+            )
+            self._executor_thread.start()
 
-        self._wait_for_servers()
-        self._wait_for_joint_states()
+            self.wait_until_ready()
 
     @property
     def node(self) -> Node:
@@ -158,6 +186,16 @@ class MoveItClient:
     # ------------------------------------------------------------------
     # Startup helpers
     # ------------------------------------------------------------------
+
+    def wait_until_ready(self) -> None:
+        """Block until move_group servers + joint states are ready.
+
+        Called automatically when manage_executor=True. With manage_executor=False the
+        caller must call this AFTER it has started spinning the node (otherwise the
+        blocking waits below never receive messages).
+        """
+        self._wait_for_servers()
+        self._wait_for_joint_states()
 
     def _wait_for_servers(self) -> None:
         """Block until all MoveGroup action servers (arms + lift) are reachable."""
@@ -206,6 +244,39 @@ class MoveItClient:
     def _guard(self) -> None:
         if self._destroyed:
             raise RuntimeError('MoveItClient has been destroyed — create a new instance.')
+
+    def _assert_fresh_joint_state(self, arm: Arm, max_age: float = 1.0) -> bool:
+        """Ensure the cached joint_state (used as the plan start_state) is present and recent.
+
+        pymoveit2 sets MotionPlanRequest.start_state.joint_state from self.joint_state. A
+        missing/stale sample yields a garbage start state and a misleading
+        START_STATE_IN_COLLISION (-10). Wait briefly for a sample; abort the plan with a
+        clear message if it is missing, rather than planning from an unreliable start state.
+        Freshness is best-effort: skipped for unstamped publishers / clock-domain mismatches
+        so the guard never falsely blocks legitimate motion.
+        """
+        moveit2 = self._moveit(arm)
+        deadline = time.time() + 0.5
+        js = moveit2.joint_state
+        while js is None and time.time() < deadline:
+            time.sleep(0.02)
+            js = moveit2.joint_state
+        if js is None:
+            self._log.error(
+                f'[{arm.value}] joint_state missing — start state unreliable; aborting plan'
+            )
+            return False
+        stamp = js.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0:
+            return True  # unstamped publisher — presence is all we can verify
+        age = self._node.get_clock().now().nanoseconds / 1e9 - (stamp.sec + stamp.nanosec / 1e9)
+        if max_age < age < 3600.0:  # clearly stale, but not a clock-domain mismatch
+            self._log.error(
+                f'[{arm.value}] joint_state stale (age={age:.2f}s > {max_age}s) — '
+                'start state unreliable; aborting plan'
+            )
+            return False
+        return True
 
     def _log_pose(self, label: str, arm: Arm, pose: Pose,
                   vel: float, acc: float, tol_pos: float, tol_ori: float) -> None:
@@ -277,13 +348,13 @@ class MoveItClient:
         if error_val in _PLANNING_ERROR_CODES:
             self._log.error(
                 f'[{label}] [{arm.value}] INVALID in {elapsed:.2f}s '
-                f'| error_code={error_val} — planning/IK failure (unreachable pose or no IK solution)'
+                f'| error_code={error_val} ({_error_name(error_val)}) — planning rejected before execution'
             )
             return MoveResult.INVALID
 
         self._log.error(
             f'[{label}] [{arm.value}] FAILED in {elapsed:.2f}s '
-            f'| error_code={error_val} — execution error (joint limits, collision, controller)'
+            f'| error_code={error_val} ({_error_name(error_val)}) — execution error (joint limits, collision, controller)'
         )
         return MoveResult.FAILED
 
@@ -343,6 +414,8 @@ class MoveItClient:
         experiment harness passes an empty tuple so planner comparisons stay clean.
         """
         self._guard()
+        if not self._assert_fresh_joint_state(arm):
+            return MoveResult.INVALID
         tol_pos, tol_ori = _POSE_TOL_POSITION, _POSE_TOL_ORIENTATION
         self._log_pose('move_to_pose', arm, pose, velocity, acceleration, tol_pos, tol_ori)
 
@@ -465,7 +538,7 @@ class MoveItClient:
                     self._log.error(
                         f'[{label}] [{arm.value}] {result.value.upper()} in {elapsed:.2f}s '
                         f'| fraction={response.fraction:.3f} '
-                        f'| error_code={response.error_code.val}'
+                        f'| error_code={response.error_code.val} ({_error_name(response.error_code.val)})'
                     )
                 return details
 
@@ -483,7 +556,7 @@ class MoveItClient:
             else:
                 self._log.error(
                     f'[{label}] [{arm.value}] {result.value.upper()} in {elapsed:.2f}s '
-                    f'| error_code={motion_response.error_code.val}'
+                    f'| error_code={motion_response.error_code.val} ({_error_name(motion_response.error_code.val)})'
                 )
             return details
 
@@ -504,6 +577,9 @@ class MoveItClient:
                 f'[move_to_joints] [{arm.value}] expected 7 joint positions, '
                 f'got {len(joint_positions)}'
             )
+            return MoveResult.INVALID
+
+        if not self._assert_fresh_joint_state(arm):
             return MoveResult.INVALID
 
         joints_str = ', '.join(f'{j:.3f}' for j in joint_positions)
@@ -751,5 +827,7 @@ class MoveItClient:
         """Shut down the executor and join the background thread.
         Caller is responsible for destroying the node and calling rclpy.shutdown()."""
         self._destroyed = True
-        self._executor.shutdown()
-        self._executor_thread.join(timeout=5.0)
+        if self._executor is not None:
+            self._executor.shutdown()
+        if self._executor_thread is not None:
+            self._executor_thread.join(timeout=5.0)

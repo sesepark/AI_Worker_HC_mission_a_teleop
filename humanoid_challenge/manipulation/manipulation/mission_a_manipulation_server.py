@@ -76,7 +76,9 @@ class MissionAManipulationServer(Node):
             callback_group=self._cbg)
 
         # --- 검증된 manip primitive (test 구성 재사용) ---
-        self.client = MoveItClient(self)
+        # manage_executor=False: 이 서버 main()이 단일 executor 로 노드를 spin 한다.
+        # (MoveItClient 가 자체 executor 를 또 만들면 한 노드를 두 executor 가 spin → action_client.c:659.)
+        self.client = MoveItClient(self, manage_executor=False)
         self.gripper = GripperInterface(self)
         self.assess = GraspAssessment(self)
         self.grasp = GraspSkill(self, self.gripper, self.assess)
@@ -90,19 +92,25 @@ class MissionAManipulationServer(Node):
         self._latest_target: Pose | None = None
         self._pending_attach = False         # class/target 미준비 시 보류(mock _pending_attach 시맨틱)
         self._busy = threading.Lock()        # scan/pick/place MoveIt 동작 직렬화
+        self._ready = False                  # startup() 완료 전엔 IDLE 미발행(FSM INIT 보류)
 
-        # planning scene 1회 초기화(검증 test 와 동일)
-        clear_all_objects(self.client)
-        setup_zone_a(self.client)
-
+        # planning scene 초기화는 spin 이 돌아야 가능 → startup() 으로 이동.
         self.create_timer(0.2, self._pub_manip, callback_group=self._cbg)
         self.create_timer(0.1, self._tick_pending, callback_group=self._cbg)
-        self.get_logger().info('mission_a_manipulation_server ready (real MoveIt)')
 
     # ------------------------------------------------------------------ #
+    def startup(self) -> None:
+        """단일 executor 가 spin 중일 때 호출 — MoveIt 준비 대기 + planning scene 초기화 후 IDLE 발행 개시."""
+        self.client.wait_until_ready()       # move_group 서버 + joint_states 준비(외부 executor 가 spin)
+        clear_all_objects(self.client)
+        setup_zone_a(self.client)
+        self._ready = True
+        self.get_logger().info('mission_a_manipulation_server ready (real MoveIt)')
+
     def _pub_manip(self) -> None:
-        # 실제 동작 중이면 BUSY, 아니면 IDLE(FSM INIT 통과 조건). mock은 항상 IDLE.
-        self.pub_manip.publish(String(data='BUSY' if self._busy.locked() else 'IDLE'))
+        # 준비 전 또는 동작 중이면 BUSY, 준비+유휴면 IDLE(FSM INIT 통과 조건). mock은 항상 IDLE.
+        busy = (not self._ready) or self._busy.locked()
+        self.pub_manip.publish(String(data='BUSY' if busy else 'IDLE'))
 
     def _on_task(self, msg: GetTaskList.Response) -> None:
         if self._mirror.is_empty():
@@ -193,13 +201,20 @@ class MissionAManipulationServer(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = MissionAManipulationServer()
+
+    # 단일 executor 로 노드를 spin. 모든 엔티티는 노드 __init__ 에서 이미 생성됨
+    # (MoveItClient 의 move_group action client 포함) → spin 이전 생성 보장.
     executor = MultiThreadedExecutor()
     executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
     try:
-        executor.spin()
+        node.startup()          # executor 가 spin 중 → MoveIt 준비 대기 + 씬 초기화 + IDLE 개시
+        spin_thread.join()
     except KeyboardInterrupt:
         pass
     finally:
+        node.client.destroy()   # MoveItClient: manage_executor=False 라 내부 executor 없음(no-op 안전)
         executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
