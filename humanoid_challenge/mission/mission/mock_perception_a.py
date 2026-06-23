@@ -2,7 +2,7 @@
 """Mock Perception (Mission A) — 비-sim 검증용 perception 입력 소스.
 
 제공:
-  - /perception/task_list (String JSON): 목표 부품 목록(설정형 parts).
+  - /perception/task_list (GetTaskList.Response): 목표 부품 목록(설정형 parts; 통합 계약).
   - /perception/wrist/target_one_pose (PoseStamped, base_link): A2_SCAN target.
   - /perception/place_pose_valid (String JSON): C3 트레이 place 위치 유효성.
     place_pose_invalid / place_pose_flap 주입으로 C3 게이트 검증.
@@ -20,6 +20,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
+from mission_interfaces.srv import GetTaskList
+from mission_interfaces.msg import TaskItem
 
 
 # 기본 목표: 총 5개 (≥5 사이클 루프 검증용)
@@ -51,7 +53,8 @@ class MockPerceptionA(Node):
             self._parts = list(DEFAULT_PARTS)
 
         cbg = ReentrantCallbackGroup()
-        self.pub_task = self.create_publisher(String, '/perception/task_list', 10)
+        # 통합 계약: /perception/task_list = GetTaskList.Response (tray_manage_node 와 동일 타입)
+        self.pub_task = self.create_publisher(GetTaskList.Response, '/perception/task_list', 10)
         self.pub_target = self.create_publisher(
             PoseStamped, '/perception/wrist/target_one_pose', 10)
         self.pub_place = self.create_publisher(String, '/perception/place_pose_valid', 10)
@@ -66,7 +69,17 @@ class MockPerceptionA(Node):
             f'place_invalid={self.place_invalid}, place_flap={self.place_flap})')
 
     def _pub_task(self) -> None:
-        self.pub_task.publish(String(data=json.dumps({'parts': self._parts})))
+        resp = GetTaskList.Response()
+        resp.success = True
+        resp.message = 'mock task list'
+        resp.screen_detected = True
+        resp.all_counts_recognized = True
+        resp.frames_used = 1
+        resp.parts = [
+            TaskItem(name=str(p.get('name', '')), count=int(p.get('count', 0)))
+            for p in self._parts
+        ]
+        self.pub_task.publish(resp)
 
     def _pub_target(self) -> None:
         m = PoseStamped()
