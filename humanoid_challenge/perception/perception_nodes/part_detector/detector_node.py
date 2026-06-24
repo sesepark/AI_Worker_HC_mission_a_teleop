@@ -130,6 +130,7 @@ class PartDetectorNode(Node):
 
         boxes = results.boxes if results.boxes is not None else []
         masks = results.masks.xy if results.masks is not None else None
+        detection_logs = []
 
         for idx, box in enumerate(boxes):
             cls = int(box.cls.item()) if hasattr(box.cls, 'item') else int(box.cls)
@@ -165,11 +166,17 @@ class PartDetectorNode(Node):
             self._draw_bbox(overlay, x1, y1, x2, y2, color, class_name, conf)
 
             if self.log_detections:
-                self.get_logger().info(
+                detection_logs.append(
                     f'[{self.camera_name}] {class_name} conf={conf:.2f} '
                     f'bbox=[{x1},{y1},{x2},{y2}] '
                     f'center=({det.center_x:.1f},{det.center_y:.1f})'
                 )
+
+        if self.log_detections and detection_logs:
+            self.get_logger().info(
+                f'detections={len(detection_logs)} | ' + '\n'.join(detection_logs),
+                throttle_duration_sec=5.0,
+            )
 
         self.detection_pub.publish(det_array)
 
