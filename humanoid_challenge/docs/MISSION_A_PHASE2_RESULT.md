@@ -68,46 +68,39 @@ cd /ws && colcon build --symlink-install --packages-up-to mission && colcon buil
 # place_pose_valid(C3) 확인
 ros2 run perception place_pose_valid_node --ros-args -p force_invalid:=true   # {"valid": false}
 ```
-### 6.2 실 로봇(robot PC + humanoid_challenge 데스크톱, 동일 DDS 도메인) — G-T1/G-T2/G-FINAL
-> ✅ **G-T2 LIVE 검증 완료(2026-06-24)** — robot PC(`ffw-...`) bringup + 데스크톱(`humanoid_challenge`, domain 30)
-> 에서 perception 전 구간 동작 확인: detector `flange_nut conf=0.96`, depth `16UC1` 스트림 ~4.4Hz,
-> `/perception/wrist/target_one_pose` = base_link(0.103,-0.216,0.372)m, `/perception/place_pose_valid` 실 TF 판정.
->
+### 6.2 실 로봇 전체 사이클 실행 매뉴얼 (G-T1/G-T2/G-FINAL)
+
+> **운용 아키텍처 (중요)**: **로봇 PC**(`ffw-...`)는 **bringup + MoveIt 등 로봇 구동에 필요한 것만** 실행한다.
+> **메인 PC**(`humanoid_challenge` 환경, 본 레포 빌드)가 **모든 응용 패키지** — manip 서버(`mission_a_manip`),
+> perception, mission FSM(`mission_a_real`) — 를 실행하고, **같은 네트워크의 ROS(domain 30) 통신**으로 로봇
+> move_group/controller 를 원격 제어한다. 즉 manip 서버도 로봇이 아니라 **메인 PC에서 실행**한다(메인 PC에
+> pymoveit2 + manipulation/mission/mission_interfaces 빌드 필요). 따라서 manip 서버의 MoveItClient 는 move_group·
+> /joint_states 를 **크로스-PC**로 받으며, FIX-1(단일 executor)·FIX-2(joint_state 신선도 가드)가 이 경로에 직접 작용.
+
 > **핵심 근본원인 2가지(반드시 반영)**:
 > 1. **colorizer 끄기** — bringup 기본은 depth 를 **colorized `rgb8`** 로 발행 → (a) metric 아님(3D 투영 불가),
->    (b) 용량 커서 **네트워크로 안 넘어옴**(데스크톱에서 depth 0프레임). `colorizer.enable1:=false
->    colorizer.enable2:=false` 로 끄면 depth=`16UC1` 가 되고 **그제서야 cross-PC 스트림됨**(~4.4Hz).
-> 2. **perception_live 의 static TF 필수** — 로봇 TF 트리는 `base_link→…→camera_r_link` 와 realsense 의
->    `camera_right_link→camera_right_color_optical_frame` 가 **끊겨 있음**. `perception_live` 가 발행하는
->    `camera_r_link→camera_right_link`(identity) 가 둘을 잇는다 → **`publish_camera_tf:=true` 유지(기본)**.
->    (이게 없으면 wrist 노드가 `tf_failed` 로 target 미발행.)
->
-> ⚠️ 카메라 단일 소유(FIX-4): `ffw_sg2_follower_ai` 가 camera_right 를 올리므로 **별도 카메라 launch 금지**
-> (`ffw_sg2_ai` 등과 동시 기동 시 camera_right USB 충돌 `RS2_USB_STATUS_BUSY`).
-```bash
-# 공통 env(양쪽 동일): ROS_DOMAIN_ID=30; ROS_LOCALHOST_ONLY=0; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-# [robot PC] 로봇/컨트롤러 + camera_right (colorizer 끄기 필수! tf_publish_rate 로 TF 부하 완화)
-ros2 launch ffw_bringup ffw_sg2_follower_ai.launch.py \
-     colorizer.enable1:=false colorizer.enable2:=false tf_publish_rate1:=10.0 tf_publish_rate2:=10.0
-ros2 launch ffw_moveit_config moveit.launch.py
-ros2 topic echo /camera_right/camera_right/depth/image_rect_raw --field encoding --once   # 반드시 16UC1
-# [robot PC] 실 manip 서버 (manipulation/mission/mission_interfaces 를 robot ws 에 빌드 후; 단일 executor)
-ros2 launch manipulation mission_a_manip.launch.py
-ros2 action list | grep move_to_scan_pose                     # G-T1: 실 노드 노출(연속 10회 재기동 생존)
-# [데스크톱 humanoid_challenge] 실 perception + mission_a(nav=stub).  publish_camera_tf 기본 true 유지.
-ros2 launch mission mission_a_real.launch.py mock_monitor_ocr:=true        # G-FINAL
-#   C3 활성: ... use_place_pose_check:=true
-# G-T2 확인(데스크톱):
-ros2 topic hz /camera_right/camera_right/depth/image_rect_raw  # 16UC1 스트림(~4Hz 이상)
-ros2 topic echo /detections --once                            # 부품 검출 유입(부품을 wrist FOV 에 둘 것)
-ros2 topic echo /perception/wrist/target_one_pose --once      # base_link 3D target 발행
-# 게이트 안전: C2 드롭/C3 무효·플랩 시 적재 0 (실 환경 확인)
-# 참고: depth/color 가 네트워크로 ~4Hz 로 throttle 됨. RGB-D sync 가 흔들리면
-#   config/wrist_projection/params.yaml 의 sync_slop 을 0.10→0.2~0.3 으로 상향.
-# 다사이클: manip 서버 재기동 없이 mission_a_real 연속 3회 → 매회 move_to_scan_pose success=True (FIX-1/2 회귀)
-```
-> 참고(FIX-6, 인지용): follower bringup 의 Dynamixel `BULK_READ_FAIL`/실시간 오버런·lidar 종료 `-6` 은
-> ai_worker 벤더(드라이버/HW) 영역 — 본 레포 변경 대상 아님. baud/USB latency·전원·async 트리거 주기 점검 권고.
+>    (b) 용량 커서 **네트워크로 안 넘어옴**(메인 PC에서 depth 0프레임). `colorizer.enable*:=false` 로 끄면
+>    depth=`16UC1` 가 되고 **그제서야 cross-PC 스트림됨**(~4.4Hz). `tf_publish_rate*:=10.0` 로 TF 부하도 완화.
+> 2. **perception_live 의 static TF 필수** — 로봇 TF(`base_link→…→camera_r_link`)와 realsense
+>    (`camera_right_link→camera_right_color_optical_frame`)가 **끊겨 있어**, perception_live 의
+>    `camera_r_link→camera_right_link`(identity) 브리지가 둘을 잇는다 → `publish_camera_tf:=true` 유지(기본).
+> ⚠️ 카메라 단일 소유(FIX-4): bringup 이 camera_right 를 올리므로 **별도 카메라 launch 금지**(USB 충돌).
+
+**공통 env (양쪽 PC 동일)**: `ROS_DOMAIN_ID=30`, `ROS_LOCALHOST_ONLY=0`, `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`
+
+| 순서 | 위치 | 명령 | 직후 확인(메인 PC) — **공유할 결과** |
+|---|---|---|---|
+| **A. bringup+MoveIt** | 로봇 PC | `ros2 launch ffw_bringup ffw_sg2_follower_ai.launch.py colorizer.enable1:=false colorizer.enable2:=false tf_publish_rate1:=10.0 tf_publish_rate2:=10.0`  그리고  `ros2 launch ffw_moveit_config moveit.launch.py` | `ros2 node list \| grep -E "move_group\|controller_manager"` (보여야 함), `ros2 topic hz /joint_states`, `ros2 topic echo /camera_right/camera_right/depth/image_rect_raw --field encoding --once` → **반드시 `16UC1`** |
+| **B. manip 서버** | **메인 PC** | `ros2 launch manipulation mission_a_manip.launch.py` | `씬 초기화 완료` → `ready (real MoveIt)` 로그, `ros2 action list \| grep move_to_scan_pose`, `ros2 topic echo /manipulator_state --once` → **`IDLE`** (FIX-1) |
+| **C. perception+FSM** | **메인 PC** | `ros2 launch mission mission_a_real.launch.py mock_monitor_ocr:=true use_place_pose_check:=true` | `ros2 topic echo /detections --once`(부품 검출), `ros2 topic echo /perception/wrist/target_one_pose --once`(base_link 3D), FSM 상태천이 `INIT→A1_MONITOR→A2_SCAN_POSE→A2_SCAN→A3_PICK` |
+| **D. 사이클 관찰** | (자동) | 부품을 **scan 자세 wrist FOV**(트레이)에 5개 배치 | `A3_PICK` 파지 성공(C2 래치 `/attached_object`), `A3_PLACE` C3 게이트→`/detach_cmd`→잔여 차감, `VERIFY→DONE 적재 N`. FIX-2(`-10` 무)/FIX-3(`error_code=-N (이름)`) |
+| **E. 다사이클** | (반복) | manip 서버 **재기동 없이** mission_a_real 연속 3회 | 매회 풀사이클 DONE, `move_to_scan_pose success=True` (FIX-1/2 회귀) |
+
+> 안전: B~E 부터 실 팔이 움직임(scan/pick/place). e-stop 준비. 이상 거동(반복 `-10`, 엉뚱 타겟, 충돌 위험) 시 즉시 중단.
+> 튜닝: depth/color 가 네트워크로 ~4Hz throttle. RGB-D sync 흔들리면 `config/wrist_projection/params.yaml` 의
+> `sync_slop` 0.10→0.2~0.3. PTP 가 `non-zero start velocity(INVALID_ROBOT_STATE)` 내면 로봇 정지 후(zero-vel) 시도.
+> FIX-6(인지): Dynamixel `BULK_READ_FAIL`/실시간 오버런은 벤더(로봇 HW/드라이버) 영역 — baud/USB latency/전원/제어
+> 루프 부하 점검. 버스 불안정 시 joint_states 깜빡임→FIX-2 가드 발동, PTP start-state 거부로 pick 불안정.
 
 ## 7. 수용/무회귀 요약
 - ✅ G-T3(서비스 remap + topic 무회귀), 헤드리스 mock 경로 무회귀(s0=3, s1=5, RECOVERY 0), place_pose_valid C3 계약.
