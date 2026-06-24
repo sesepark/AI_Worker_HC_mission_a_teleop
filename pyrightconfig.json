@@ -1,0 +1,26 @@
+{
+  "include": [
+    "humanoid_challenge",
+    "ai_worker",
+    "physical_ai_tools",
+    "robotis_applications"
+  ],
+  "extraPaths": [
+    "humanoid_challenge/perception",
+    "humanoid_challenge/mission",
+    "humanoid_challenge/manipulation",
+    "ai_worker/ffw_bringup",
+    "ai_worker/ffw_teleop",
+    "physical_ai_tools/physical_ai_bt",
+    "physical_ai_tools/physical_ai_server",
+    "robotis_applications/robotis_vuer"
+  ],
+  "exclude": [
+    "**/build",
+    "**/install",
+    "**/log",
+    "**/__pycache__"
+  ],
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
+}

@@ -1,0 +1,16 @@
+{
+  "python.languageServer": "Pylance",
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/humanoid_challenge/perception",
+    "${workspaceFolder}/humanoid_challenge/mission",
+    "${workspaceFolder}/humanoid_challenge/manipulation",
+    "${workspaceFolder}/ai_worker/ffw_bringup",
+    "${workspaceFolder}/ai_worker/ffw_teleop",
+    "${workspaceFolder}/physical_ai_tools/physical_ai_bt",
+    "${workspaceFolder}/physical_ai_tools/physical_ai_server",
+    "${workspaceFolder}/robotis_applications/robotis_vuer"
+  ],
+  "python.analysis.indexing": true,
+  "python.analysis.useLibraryCodeForTypes": true
+}
