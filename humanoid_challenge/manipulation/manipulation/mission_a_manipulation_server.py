@@ -82,7 +82,7 @@ class MissionAManipulationServer(Node):
         self.gripper = GripperInterface(self)
         self.assess = GraspAssessment(self)
         self.grasp = GraspSkill(self, self.gripper, self.assess)
-        self.pfilter = PlanningFilter(self.client, log=self.get_logger().info)
+        self.pfilter = PlanningFilter(self.client, log=self.get_logger())
         self.pick = PickSkill(self, self.client, self.gripper, self.grasp, self.pfilter)
         self.place = PlaceSkill(self, self.client, self.gripper, self.pfilter)
 
