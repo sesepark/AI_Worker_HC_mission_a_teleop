@@ -1,0 +1,35 @@
+# Zone A (부품 선별) 환경 수치
+# 기준: 참가팀공유2026휴머노이드챌린지_0618_v4.pdf
+# 단위: 미터 (m)
+
+zone_a:
+  table:
+    width: 1.600          # y방향 외측 폭 (W1600mm)
+    depth: 0.800          # x방향 외측 깊이 (D800mm)
+    height: 0.800         # 전체 높이 (H800mm)
+    top_thickness: 0.020
+    # 로봇이 테이블 하부로 250mm 진입 기준 (테이블 앞 엣지 x=0.050)
+    center_x: 0.450
+    leg_size: 0.050       # 다리 단면 정사각형 (50×50mm)
+    leg_inset: 0.025      # 다리 모서리 안쪽 여백
+
+  yellow_box:             # 노란 플라스틱 공구함 (부품 혼재 상자)
+    outer_width: 0.760    # y방향 외측 (W760mm)
+    outer_depth: 0.480    # x방향 외측 (D480mm)
+    outer_height: 0.200   # z방향 외측 (H200mm)
+    wall_thickness: 0.010
+    # x: 테이블 앞 엣지(0.050) + 30mm + D/2 = 0.050 + 0.030 + 0.240 = 0.320
+    # y: right arm 담당(-y) pick 박스 → center at -295mm → -0.295
+    # 검산 가로: 125 + 590(파란,+y) + 760(노란,-y) + 125 = 1600mm OK
+    center_x: 0.320
+    center_y: -0.295
+
+  blue_tray:              # 파란 플라스틱 공구함 (선별 목적지 트레이)
+    outer_width: 0.590    # y방향 외측 (W590mm)
+    outer_depth: 0.380    # x방향 외측 (D380mm)
+    outer_height: 0.150   # z방향 외측 (H150mm)
+    wall_thickness: 0.010
+    # x: 테이블 앞 엣지(0.050) + 30mm + D/2 = 0.050 + 0.030 + 0.190 = 0.270
+    # y: left arm 담당(+y) place 트레이 → center at +380mm → +0.380
+    center_x: 0.270
+    center_y: 0.380
