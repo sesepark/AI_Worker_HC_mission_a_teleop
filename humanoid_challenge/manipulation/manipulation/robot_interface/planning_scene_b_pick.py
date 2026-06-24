@@ -15,7 +15,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 
-from ai_worker_manipulation.robot_interface.moveit_client import MoveItClient
+from manipulation.robot_interface.moveit_client import MoveItClient
 
 from geometry_msgs.msg import Pose, Point, Vector3
 from std_msgs.msg import ColorRGBA
@@ -30,7 +30,7 @@ from rclpy.qos import (
 
 FRAME_ID = "base_link"
 
-PACKAGE_NAME = "ai_worker_manipulation"
+PACKAGE_NAME = "manipulation"
 PACKAGE_SHARE_DIR = get_package_share_directory(PACKAGE_NAME)
 ZONE_B_CONFIG_PATH = os.path.join(PACKAGE_SHARE_DIR, "config", "zone_b_pick.yaml")
 

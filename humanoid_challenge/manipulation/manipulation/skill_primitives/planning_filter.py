@@ -42,7 +42,7 @@ _DEFAULT_CFG = {
         'z': [0.50, 1.30],
     },
     'path_quality': {
-        'max_joint_path_length': 4.0,
+        'max_joint_path_length': 5.0,
         'max_joint_step': 1.0,
     },
     'global_planners': [

@@ -303,6 +303,17 @@ def remove_zone_b(client: MoveItClient) -> None:
 # C구간 설정 / 해제
 # ══════════════════════════════════════════════
 
+def setup_zone_c_table(client: MoveItClient) -> None:
+    """Zone C 테이블(bench body + top)만 등록. 충돌 방지 최소 구성."""
+    _add_box(client, ZONE_C_BENCH_BODY_ID, ZONE_C_BENCH_BODY_SIZE, ZONE_C_BENCH_BODY_POSITION)
+    _add_box(client, ZONE_C_BENCH_TOP_ID,  ZONE_C_BENCH_TOP_SIZE,  ZONE_C_BENCH_TOP_POSITION)
+
+
+def remove_zone_c_table(client: MoveItClient) -> None:
+    _remove_obj(client, ZONE_C_BENCH_BODY_ID)
+    _remove_obj(client, ZONE_C_BENCH_TOP_ID)
+
+
 def setup_zone_c(client: MoveItClient) -> None:
     _remove_obj(client, ZONE_C_MONITOR_ID)  # 이전 세션 레거시 정리
     _add_box(client, ZONE_C_BENCH_BODY_ID, ZONE_C_BENCH_BODY_SIZE, ZONE_C_BENCH_BODY_POSITION)

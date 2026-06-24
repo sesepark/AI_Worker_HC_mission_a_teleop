@@ -293,7 +293,7 @@ def make_task_pre_pose(target_pose: Pose, offset: float = TASK_PRE_GRASP_OFFSET)
     If the helper is not available, fall back to a simple upward Z offset.
     """
     try:
-        from ai_worker_manipulation.skill_primitives.pick_skill import pre_grasp_of
+        from manipulation.skill_primitives.pick_skill import pre_grasp_of
 
         return pre_grasp_of(target_pose, offset=float(offset))
     except Exception:

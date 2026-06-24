@@ -87,7 +87,7 @@ class GripperInterface:
         self,
         side,
         position: float,
-    ):
+    ) -> bool:
 
         side = side.lower()
 
@@ -96,7 +96,10 @@ class GripperInterface:
                 self._ignore_new_calls_while_executing
                 and self._is_executing
             ):
-                return
+                self._log.warn(
+                    f'[GripperInterface.control] [{side}] dropped — still executing'
+                )
+                return False
             self._is_motion_requested = True
             self._is_executing = True
 
@@ -105,6 +108,7 @@ class GripperInterface:
             side,
             position,
         )
+        return True
 
     def open(
         self,
@@ -122,7 +126,7 @@ class GripperInterface:
             self.OPEN,
         )
 
-    def open_to(self, side, amount: float):
+    def open_to(self, side, amount: float) -> bool:
         """Open gripper to a specific amount (0.0 = fully open, 1.0 = fully closed).
 
         Use when starting from closed state and opening just enough to fit around an object.
@@ -134,7 +138,7 @@ class GripperInterface:
         """
         side = side.lower()
         amount = max(self.OPEN, min(self.CLOSE, amount))
-        self.control(side, amount)
+        return self.control(side, amount)
         
     def close(
         self,
