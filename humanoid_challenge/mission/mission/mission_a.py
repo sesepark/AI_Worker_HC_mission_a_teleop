@@ -147,6 +147,11 @@ class MissionA(Node):
             self.declare_parameter('rescan_each_cycle', True).value)
         self.nav_service_name = str(
             self.declare_parameter('nav_service_name', 'move_base_lateral').value)
+        # cross-PC nav 서비스 콜드 디스커버리 대비: 첫 호출 전 wait_for_service 타임아웃.
+        #   (단일 PC 로컬은 ~0s 매칭이지만 cross-PC request/reply 엔드포인트 매칭은 더 걸릴 수 있음.
+        #    timeout 시 'pending' 반환→매 틱 재시도, 상태 timeout=base_move_timeout_sec 로 유계.)
+        self.nav_service_wait_sec = float(
+            self.declare_parameter('nav_service_wait_sec', 10.0).value)
         self.scan_action_name = str(
             self.declare_parameter('scan_action_name', 'move_to_scan_pose').value)
 
@@ -355,14 +360,19 @@ class MissionA(Node):
     def _servers_ready(self) -> bool:
         """DDS 위생(INIT 사전 게이트): 다음에 곧바로 필요한 의존성만 확인한다.
 
-        - scan action 서버: 직후 A2_SCAN_POSE 에서 사용 → INIT 에서 워밍·확인.
+        - scan action 서버: 직후 A2_SCAN_POSE 에서 사용 → INIT 에서 워밍·확인(게이트).
         - nav 서비스: A3_MOVE_TO_TRAY(한 사이클 뒤)에서 사용 → 그 핸들러가 자체 대기.
-          (동시 기동 시 nav 서비스 디스커버리 지연으로 INIT 이 막히지 않도록 게이트에서 제외.)
+          여기서는 비차단 그래프 nudge 만 하여 cross-PC request/reply 엔드포인트 매칭을 ~1 사이클
+          일찍 시작한다. **게이트하지 않음**(준비 안돼도 True 반환 = INIT 무차단; 동시 기동 시
+          nav 디스커버리 지연으로 INIT 이 막히지 않게 함).
         """
         if not self._scan_cli.server_is_ready():
             self._scan_cli.wait_for_server(timeout_sec=0.0)  # 그래프 nudge
             if not self._scan_cli.server_is_ready():
                 return False
+        # nav 서비스 콜드 디스커버리 워밍업(비차단, 게이트 아님).
+        if self.nav_mode == 'service' and not self._nav_cli.service_is_ready():
+            self._nav_cli.wait_for_service(timeout_sec=0.0)  # 그래프 nudge only
         return True
 
     def _on_scan_goal_response(self, future) -> None:
@@ -414,7 +424,7 @@ class MissionA(Node):
         if not latch.sent:
             if not self._nav_cli.service_is_ready():
                 latch.sent = True
-                if not self._nav_cli.wait_for_service(timeout_sec=2.0):
+                if not self._nav_cli.wait_for_service(timeout_sec=self.nav_service_wait_sec):
                     latch.sent = False
                     self.get_logger().warn(
                         f'[{label}] nav 서비스 준비 대기 중', throttle_duration_sec=2.0)

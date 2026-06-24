@@ -27,6 +27,7 @@ setup(
             'mock_manipulation_a = mission.mock_manipulation_a:main',
             'mock_navigation_a = mission.mock_navigation_a:main',
             'mock_perception_a = mission.mock_perception_a:main',
+            'move_base_lateral = mission.move_base_lateral_node:main',
         ],
     },
 )
