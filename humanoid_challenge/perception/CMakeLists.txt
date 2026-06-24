@@ -44,6 +44,21 @@ install(PROGRAMS
   RENAME monitor_ocr_viewer
 )
 install(PROGRAMS
+  perception_nodes/head_pipe/head_pipe_top_centers_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME head_pipe_top_centers_node
+)
+install(PROGRAMS
+  perception_nodes/part_detector/peg_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME peg_detector_node
+)
+install(PROGRAMS
+  perception_nodes/part_detector/nut_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME nut_detector_node
+)
+install(PROGRAMS
   perception_nodes/place_validity/place_pose_valid_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME place_pose_valid_node

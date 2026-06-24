@@ -1,173 +1,168 @@
-#!/usr/bin/env python3
-"""OpenCV viewer for monitor OCR images and `/monitor_ocr/result`."""
-from __future__ import annotations
+"""
+ROS2 뷰어 노드: 카메라 이미지 + OCR 결과를 OpenCV 창으로 시각화
 
+Subscribe:
+  /<image_topic>       (sensor_msgs/Image)
+  /monitor_ocr/result  (std_msgs/String, JSON)
+
+Parameters:
+  image_topic  (str, default='/zed/zed_node/left/image_rect_color')
+"""
 import json
 import threading
 
 import cv2
+import numpy as np
 import rclpy
-from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
+from cv_bridge import CvBridge
 
-from perception_nodes.monitor_ocr.ocr_pipeline_parts import find_display_parts
+from perception_nodes.monitor_ocr.ocr_pipeline import find_display
 
 
-class MonitorOCRViewer(Node):
-    def __init__(self) -> None:
-        super().__init__("monitor_ocr_viewer")
+class ViewerNode(Node):
 
-        self.declare_parameter("image_topic", "/zed/zed_node/rgb/image_rect_color")
-        self.declare_parameter("result_topic", "/monitor_ocr/result")
+    def __init__(self):
+        super().__init__('monitor_ocr_viewer')
 
-        image_topic = str(self.get_parameter("image_topic").value)
-        result_topic = str(self.get_parameter("result_topic").value)
+        self.declare_parameter('image_topic', '/zed/zed_node/left/image_rect_color')
+        image_topic = self.get_parameter('image_topic').value
 
-        self.bridge = CvBridge()
-        self.lock = threading.Lock()
-        self.frame = None
-        self.result = None
+        self._bridge  = CvBridge()
+        self._lock    = threading.Lock()
+        self._frame   = None
+        self._result  = None
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
-        )
-        self.create_subscription(Image, image_topic, self.image_callback, qos)
-        self.create_subscription(String, result_topic, self.result_callback, 10)
-        self.create_timer(1.0 / 30.0, self.render)
+            depth=1)
 
-        self.get_logger().info(
-            f"Monitor OCR viewer ready. image_topic={image_topic}, "
-            f"result_topic={result_topic}"
-        )
+        self.create_subscription(Image,  image_topic,          self._image_cb,  qos)
+        self.create_subscription(String, '/monitor_ocr/result', self._result_cb, 10)
 
-    def image_callback(self, msg: Image) -> None:
+        # 30Hz 렌더 타이머
+        self.create_timer(1.0 / 30.0, self._render)
+
+        self.get_logger().info(f'뷰어 시작  |  이미지: {image_topic}')
+        self.get_logger().info('q 키로 종료')
+
+    # ── 콜백 ─────────────────────────────────────────────────────────────────
+
+    def _image_cb(self, msg: Image):
         try:
-            image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as exc:
-            self.get_logger().error(f"cv_bridge conversion failed: {exc}")
+            img = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f'cv_bridge 오류: {e}')
             return
+        with self._lock:
+            self._frame = img
 
-        with self.lock:
-            self.frame = image
-
-    def result_callback(self, msg: String) -> None:
+    def _result_cb(self, msg: String):
         try:
-            result = json.loads(msg.data)
+            data = json.loads(msg.data)
         except Exception:
             return
+        with self._lock:
+            self._result = data
 
-        with self.lock:
-            self.result = result
+    # ── 렌더 ─────────────────────────────────────────────────────────────────
 
-    def render(self) -> None:
-        with self.lock:
-            frame = self.frame.copy() if self.frame is not None else None
-            result = dict(self.result) if isinstance(self.result, dict) else None
+    def _render(self):
+        with self._lock:
+            frame  = self._frame.copy()  if self._frame  is not None else None
+            result = self._result.copy() if self._result is not None else None
 
         if frame is None:
             return
 
-        cv2.imshow("Monitor OCR Viewer", self.draw(frame, result))
+        vis = self._draw(frame, result)
+        cv2.imshow('Monitor OCR Viewer', vis)
         key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            self.get_logger().info("Viewer shutdown requested.")
+        if key == ord('q'):
+            self.get_logger().info('종료')
             cv2.destroyAllWindows()
             rclpy.shutdown()
-        elif key == ord("s"):
+        elif key == ord('s'):
             import time
-
-            path = f"/tmp/monitor_ocr_capture_{int(time.time())}.png"
+            path = f'/tmp/capture_{int(time.time())}.png'
             cv2.imwrite(path, frame)
-            self.get_logger().info(f"Saved {path}")
+            self.get_logger().info(f'저장: {path}')
 
-    def draw(self, frame, result):
-        image = frame.copy()
+    # ── 오버레이 ──────────────────────────────────────────────────────────────
 
-        bbox = result.get("bbox") if result else None
-        if not bbox:
-            bbox = find_display_parts(frame)
+    def _draw(self, frame, result):
+        vis = frame.copy()
+
+        # 모니터 bbox (결과에 있으면 사용, 없으면 직접 감지)
+        bbox = None
+        if result and result.get('bbox'):
+            bbox = result['bbox']
+        else:
+            detected = find_display(frame)
+            if detected:
+                bbox = list(detected)
 
         if bbox:
-            x, y, w, h = [int(v) for v in bbox]
-            detected = bool(
-                result
-                and result.get("latest_screen_detected", result.get("screen_detected", False))
-            )
-            color = (0, 255, 0) if detected else (0, 165, 255)
-            cv2.rectangle(image, (x, y), (x + w, y + h), color, 2)
-            cv2.putText(
-                image,
-                "MONITOR",
-                (x, max(y - 6, 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
-                1,
-            )
+            bx, by, bw, bh = [int(v) for v in bbox]
+            color = (0, 255, 0) if (result and result.get('screen_detected')) else (0, 165, 255)
+            cv2.rectangle(vis, (bx, by), (bx+bw, by+bh), color, 2)
+            cv2.putText(vis, 'MONITOR', (bx, max(by-6, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
+        # OCR 결과 패널
         if result:
-            parts = result.get("parts", []) or []
-            lines = [
-                f"[{result.get('frames_used', '-')}F] "
-                f"{result.get('latest_elapsed_ms', '-')}ms",
-                f"screen: {result.get('latest_screen_detected', False)}",
-                "",
-            ]
-            lines.extend(
-                f"{item.get('name', '-')}: {item.get('count', '-')}"
-                for item in parts
-                if isinstance(item, dict)
-            )
+            pts  = result.get('mission_points', [None, None, None])
+            btn  = result.get('btn_active', False)
+            pcts = result.get('mission_percents', [None, None, None])
+            txts = result.get('mission_texts', ['', '', ''])
 
-            pad = 8
-            line_height = 24
-            panel_width = 360
-            panel_height = len(lines) * line_height + pad * 2
-            x0 = max(10, frame.shape[1] - panel_width - 10)
+            def fmt(v): return str(v) if v is not None else '-'
+
+            lines = [
+                f"[{result.get('frames_used','-')}F]  {result.get('latest_elapsed_ms','-')}ms",
+                f"제목: {result.get('title') or '-'}",
+                '',
+                f"미션1  {fmt(pts[0])}P  {fmt(pcts[0])}%  {txts[0] or '-'}",
+                f"미션2  {fmt(pts[1])}P  {fmt(pcts[1])}%  {txts[1] or '-'}",
+                f"미션3  {fmt(pts[2])}P  {fmt(pcts[2])}%  {txts[2] or '-'}",
+                '',
+                f"총점: {fmt(result.get('total_points'))}P",
+                f"버튼: {'✓ ON' if btn else 'OFF'}",
+            ]
+
+            pad, lh = 8, 22
+            panel_w = 420
+            panel_h = len(lines) * lh + pad * 2
+            x0 = frame.shape[1] - panel_w - 10
             y0 = 10
 
-            overlay = image.copy()
-            cv2.rectangle(
-                overlay,
-                (x0, y0),
-                (x0 + panel_width, y0 + panel_height),
-                (0, 0, 0),
-                -1,
-            )
-            cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
-            cv2.rectangle(
-                image,
-                (x0, y0),
-                (x0 + panel_width, y0 + panel_height),
-                (200, 200, 200),
-                1,
-            )
+            overlay = vis.copy()
+            cv2.rectangle(overlay, (x0, y0), (x0+panel_w, y0+panel_h), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.6, vis, 0.4, 0, vis)
+            cv2.rectangle(vis, (x0, y0), (x0+panel_w, y0+panel_h),
+                          (0, 255, 0) if btn else (200, 200, 200), 1)
 
-            for index, line in enumerate(lines):
+            for i, line in enumerate(lines):
                 if not line:
                     continue
-                cv2.putText(
-                    image,
-                    line,
-                    (x0 + pad, y0 + pad + line_height * (index + 1) - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.52,
-                    (255, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+                color = (0, 255, 100) if i == 0 else (255, 255, 255)
+                if '버튼' in line and btn:
+                    color = (0, 255, 0)
+                cv2.putText(vis, line, (x0+pad, y0+pad + lh*(i+1) - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
 
-        return image
+        return vis
 
+
+# ─── 진입점 ──────────────────────────────────────────────────────────────────
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MonitorOCRViewer()
+    node = ViewerNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -175,9 +170,8 @@ def main(args=None):
     finally:
         cv2.destroyAllWindows()
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

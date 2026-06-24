@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 """
-ROS2 노드: 카메라 이미지 → 대시보드 OCR → 결과 토픽 발행 + task list 서비스 응답
+ROS2 노드: 카메라 이미지 → 대시보드 OCR → 결과 토픽 발행
 
 Subscribe:
   /<image_topic>  (sensor_msgs/Image)
 
 Publish:
-  /monitor_ocr/result       (std_msgs/String) JSON 전체 결과
-  /monitor_ocr/parts        (std_msgs/String) parts 배열 JSON
-  /monitor_ocr/part_counts  (std_msgs/Int32MultiArray) 부품 count 배열
-  /monitor_ocr/recognized   (std_msgs/Bool) 화면 감지 + 모든 count 유효 여부
-
-Service:
-  /mission_a/task_list  (mission_interfaces/srv/GetTaskList)
+  /monitor_ocr/result          (std_msgs/String)       JSON 전체 결과
+  /monitor_ocr/mission_points  (std_msgs/Int32MultiArray) [pt1, pt2, pt3], -1=미인식
+  /monitor_ocr/button_active   (std_msgs/Bool)         완료 버튼 감지 여부
+  /monitor_ocr/title           (std_msgs/String)       제목 텍스트
 
 Parameters:
-  image_topic      (str,   default='/zed/zed_node/rgb/image_rect_color')
+  image_topic      (str,   default='/zed/zed_node/left/image_rect_color')
   process_interval (float, default=2.0)  OCR 최소 주기 (초)
 """
 import json
@@ -23,8 +20,6 @@ import threading
 import time
 
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
@@ -32,15 +27,11 @@ from std_msgs.msg import Bool, Int32MultiArray, String
 from cv_bridge import CvBridge
 from perception_nodes.monitor_ocr.paddle_ocr import make_ocr
 
-from perception_nodes.monitor_ocr.ocr_pipeline_parts import (
-    default_yolo_model_path,
-    load_yolo_model,
-    process_frame_parts,
-)
-from perception_nodes.monitor_ocr.frame_aggregator import FrameAggregatorParts
-
-from mission_interfaces.msg import TaskItem
-from mission_interfaces.srv import GetTaskList
+from perception_nodes.monitor_ocr.ocr_pipeline import process_frame, init_yolo
+from perception_nodes.monitor_ocr.ocr_pipeline_hq import process_frame_hq
+from perception_nodes.monitor_ocr.ocr_pipeline_parts import process_frame_parts, PART_NAMES
+from perception_nodes.monitor_ocr.ocr_pipeline_sequence import process_frame_sequence, PEG_COUNT
+from perception_nodes.monitor_ocr.frame_aggregator import FrameAggregator, FrameAggregatorParts, FrameAggregatorSequence
 
 
 class MonitorOCRNode(Node):
@@ -49,73 +40,79 @@ class MonitorOCRNode(Node):
         super().__init__('monitor_ocr_node')
 
         # 파라미터
-        self.declare_parameter('image_topic', '/zed/zed_node/rgb/image_rect_color')
-        self.declare_parameter('result_topic', '/monitor_ocr/result')
-        self.declare_parameter('parts_topic', '/monitor_ocr/parts')
-        self.declare_parameter('part_counts_topic', '/monitor_ocr/part_counts')
-        self.declare_parameter('recognized_topic', '/monitor_ocr/recognized')
+        self.declare_parameter('image_topic',      '/zed/zed_node/rgb/image_rect_color')
         self.declare_parameter('process_interval', 2.0)
-        self.declare_parameter('task_list_service_name', '/mission_a/task_list')
-        self.declare_parameter('task_list_service_timeout_sec', 20.0)
-        self.declare_parameter('task_list_service_frame_count', 3)
+        self.declare_parameter('hq_mode',          False)
+        self.declare_parameter('parts_mode',       False)
+        self.declare_parameter('sequence_mode',    False)
 
-        image_topic = str(self.get_parameter('image_topic').value)
-        result_topic = str(self.get_parameter('result_topic').value)
-        parts_topic = str(self.get_parameter('parts_topic').value)
-        part_counts_topic = str(self.get_parameter('part_counts_topic').value)
-        recognized_topic = str(self.get_parameter('recognized_topic').value)
-        self.process_interval = float(self.get_parameter('process_interval').value)
-        self._task_list_service_name = self.get_parameter('task_list_service_name').value
-        self._task_list_service_timeout_sec = float(
-            self.get_parameter('task_list_service_timeout_sec').value)
-        self._task_list_service_frame_count = int(
-            self.get_parameter('task_list_service_frame_count').value)
+        image_topic           = self.get_parameter('image_topic').value
+        self.process_interval = self.get_parameter('process_interval').value
+        self._hq_mode         = self.get_parameter('hq_mode').value
+        self._parts_mode      = self.get_parameter('parts_mode').value
+        self._sequence_mode   = self.get_parameter('sequence_mode').value
 
-        self.declare_parameter('yolo_model_path', default_yolo_model_path())
-        yolo_path = str(self.get_parameter('yolo_model_path').value)
-        try:
-            loaded_yolo_path = load_yolo_model(yolo_path)
-            if loaded_yolo_path:
-                self.get_logger().info(f'YOLO 모델 로드 완료: {loaded_yolo_path}')
-            else:
-                self.get_logger().warn(
-                    f'YOLO 모델 파일 없음: {yolo_path}; 이미지 기반 테이블 감지 사용')
-        except Exception as exc:
+        if self._parts_mode and self._sequence_mode:
             self.get_logger().warn(
-                f'YOLO 모델 로드 실패: {exc}; 이미지 기반 테이블 감지 사용')
+                'parts_mode와 sequence_mode가 모두 true입니다. parts_mode를 우선합니다.')
+            self._sequence_mode = False
+
+        # YOLO 모니터 감지 모델 초기화
+        import os
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            _default_model = os.path.join(
+                get_package_share_directory('perception'), 'model', 'monitor_ocr_best.pt')
+        except Exception:
+            _default_model = os.path.join(
+                os.path.dirname(__file__), '..', '..', 'model', 'monitor_ocr_best.pt')
+        self.declare_parameter('yolo_model_path', _default_model)
+        yolo_path = self.get_parameter('yolo_model_path').value
+        self.get_logger().info(f'YOLO 모델 로드 중: {yolo_path}')
+        try:
+            init_yolo(yolo_path)
+            self.get_logger().info('YOLO 초기화 완료')
+        except Exception as e:
+            self.get_logger().warn(f'YOLO 로드 실패 (HSV 폴백 사용): {e}')
 
         # PaddleOCR 초기화 (시간이 걸리므로 먼저 로그)
         self.get_logger().info('PaddleOCR 초기화 중...')
+        self.ocr_kor = make_ocr('korean', det_thresh=0.1,  det_box_thresh=0.2,  det_unclip=2.5)
         self.ocr_en  = make_ocr('en',     det_thresh=0.08, det_box_thresh=0.15, det_unclip=3.0)
         self.get_logger().info('PaddleOCR 초기화 완료')
 
         self.bridge      = CvBridge()
-        self._aggregator = FrameAggregatorParts(window=10)
+        if self._parts_mode:
+            self._aggregator = FrameAggregatorParts(window=10)
+        elif self._sequence_mode:
+            self._aggregator = FrameAggregatorSequence(window=10, peg_count=PEG_COUNT)
+        else:
+            self._aggregator = FrameAggregator(window=10, btn_window=3)
         self._lock           = threading.Lock()
-        self._aggregator_lock = threading.Lock()
         self._pending_img    = None
         self._processing     = False
         self._last_proc_time = 0.0
-        self._force_next_frame = False
-        self._result_condition = threading.Condition()
-        self._latest_result = None
-        self._latest_result_seq = 0
-        self._task_list_request_active = False
-        self._task_list_request_lock = threading.Lock()
 
-        self._task_list_service = self.create_service(
-            GetTaskList,
-            self._task_list_service_name,
-            self._handle_get_task_list,
-            callback_group=ReentrantCallbackGroup(),
-        )
-        self.get_logger().info(
-            f'GetTaskList service ready: {self._task_list_service_name}')
+        # Publishers (공통)
+        self.pub_result = self.create_publisher(String,          '/monitor_ocr/result',         10)
 
-        self.pub_result = self.create_publisher(String, result_topic, 10)
-        self.pub_parts = self.create_publisher(String, parts_topic, 10)
-        self.pub_part_counts = self.create_publisher(Int32MultiArray, part_counts_topic, 10)
-        self.pub_recognized = self.create_publisher(Bool, recognized_topic, 10)
+        if self._parts_mode:
+            # 부품 테이블 모드 전용 토픽
+            self.pub_parts       = self.create_publisher(String,          '/monitor_ocr/parts',        10)
+            self.pub_part_counts = self.create_publisher(Int32MultiArray, '/monitor_ocr/part_counts',  10)
+            # 인식 완료 신호: 화면 감지 + 모든 수량 유효할 때 True
+            self.pub_recognized  = self.create_publisher(Bool,            '/monitor_ocr/recognized',   10)
+        elif self._sequence_mode:
+            # 부품 순서 모드 전용 토픽
+            self.pub_sequence       = self.create_publisher(String,          '/monitor_ocr/sequence',       10)
+            self.pub_sequence_codes = self.create_publisher(Int32MultiArray, '/monitor_ocr/sequence_codes', 10)
+            # 인식 완료 신호: 화면 감지 + 모든 Peg 인식 완료일 때 True
+            self.pub_recognized     = self.create_publisher(Bool,            '/monitor_ocr/recognized',     10)
+        else:
+            # 기존 미션 모드 토픽
+            self.pub_points = self.create_publisher(Int32MultiArray, '/monitor_ocr/mission_points', 10)
+            self.pub_btn    = self.create_publisher(Bool,            '/monitor_ocr/button_active',  10)
+            self.pub_title  = self.create_publisher(String,          '/monitor_ocr/title',          10)
 
         # Subscriber (BEST_EFFORT: 드롭 허용, 항상 최신 프레임만)
         sub_qos = QoSProfile(
@@ -129,21 +126,20 @@ class MonitorOCRNode(Node):
         self._ocr_thread.start()
 
         self.get_logger().info(f'구독 토픽: {image_topic}')
-        self.get_logger().info(
-            f'발행 토픽: {result_topic}, {parts_topic}, '
-            f'{part_counts_topic}, {recognized_topic}')
         self.get_logger().info(f'OCR 주기: {self.process_interval}s')
-        self.get_logger().info('모드: 부품 수량 테이블')
+        if self._parts_mode:
+            self.get_logger().info('모드: PARTS (부품 수량 테이블)')
+        elif self._sequence_mode:
+            self.get_logger().info('모드: SEQUENCE (부품 순차 조립 지령)')
+        else:
+            self.get_logger().info(f'모드: {"HQ (고화질)" if self._hq_mode else "LQ (저화질 전처리)"}')
 
     # ── 콜백 ─────────────────────────────────────────────────────────────────
 
     def _image_cb(self, msg: Image):
         """이미지 수신 콜백 - 스로틀링 후 pending에 저장."""
         now = time.time()
-        with self._lock:
-            force_next_frame = self._force_next_frame
-
-        if not force_next_frame and now - self._last_proc_time < self.process_interval:
+        if now - self._last_proc_time < self.process_interval:
             return
         if self._processing:
             return
@@ -161,8 +157,6 @@ class MonitorOCRNode(Node):
 
         with self._lock:
             self._pending_img = img
-            if force_next_frame:
-                self._force_next_frame = False
 
     # ── OCR 워커 스레드 ──────────────────────────────────────────────────────
 
@@ -178,16 +172,40 @@ class MonitorOCRNode(Node):
                 self._processing     = True
                 self._last_proc_time = time.time()
                 try:
-                    raw = process_frame_parts(self.ocr_en, img)
-                    with self._aggregator_lock:
-                        result = self._aggregator.update(raw)
-                    self._store_latest_result(result)
-                    self._publish_result(result)
-                    parts_log = "  ".join(
-                        f"{p['name']}:{p['count']}" for p in result['parts'])
-                    self.get_logger().info(
-                        f"[부품] {parts_log}  {raw['elapsed_ms']}ms"
-                        f"  ({result['frames_used']}프레임 집계)")
+                    if self._parts_mode:
+                        raw = process_frame_parts(self.ocr_kor, self.ocr_en, img)
+                        self.get_logger().info(
+                            f"RAW screen={raw.get('screen_detected')} "
+                            f"bbox={raw.get('bbox')} "
+                            f"col={raw.get('col_ratios')} "
+                            f"parts={raw.get('parts')}"
+                        )
+                    elif self._sequence_mode:
+                        raw = process_frame_sequence(self.ocr_kor, self.ocr_en, img)
+                    elif self._hq_mode:
+                        raw = process_frame_hq(self.ocr_kor, self.ocr_en, img)
+                    else:
+                        raw = process_frame(self.ocr_kor, self.ocr_en, img)
+                    result = self._aggregator.update(raw)
+                    self._publish(result)
+                    if self._parts_mode:
+                        parts_log = "  ".join(
+                            f"{p['name']}:{p['count']}" for p in result['parts'])
+                        self.get_logger().info(
+                            f"[부품] {parts_log}  {raw['elapsed_ms']}ms"
+                            f"  ({result['frames_used']}프레임 집계)")
+                    elif self._sequence_mode:
+                        seq_log = " → ".join(n or "?" for n in result['sequence'])
+                        self.get_logger().info(
+                            f"[순서] {seq_log}  {raw['elapsed_ms']}ms"
+                            f"  ({result['frames_used']}프레임 집계)")
+                    else:
+                        pts = result['mission_points']
+                        btn = '✓' if result['btn_active'] else ''
+                        self.get_logger().info(
+                            f"포인트:{pts}  버튼:{btn}  "
+                            f"제목:{result['title']}  {raw['elapsed_ms']}ms"
+                            f"  ({result['frames_used']}프레임 집계)")
                 except Exception as e:
                     self.get_logger().error(f'OCR 처리 실패: {e}')
                 finally:
@@ -195,149 +213,70 @@ class MonitorOCRNode(Node):
             else:
                 time.sleep(0.05)
 
-    def _store_latest_result(self, result: dict) -> None:
-        with self._result_condition:
-            self._latest_result = result
-            self._latest_result_seq += 1
-            self._result_condition.notify_all()
+    # ── 토픽 발행 ────────────────────────────────────────────────────────────
 
-    def _publish_result(self, result: dict) -> None:
-        out = String()
-        out.data = json.dumps(result, ensure_ascii=False, default=int)
-        self.pub_result.publish(out)
+    def _publish(self, r: dict):
+        # 전체 JSON (공통)
+        msg_json = String()
+        msg_json.data = json.dumps(r, ensure_ascii=False, default=int)
+        self.pub_result.publish(msg_json)
 
-        parts = result.get('parts', []) or []
+        if self._parts_mode:
+            # 부품 수량 JSON
+            msg_parts = String()
+            msg_parts.data = json.dumps(r['parts'], ensure_ascii=False)
+            self.pub_parts.publish(msg_parts)
 
-        parts_msg = String()
-        parts_msg.data = json.dumps(parts, ensure_ascii=False, default=int)
-        self.pub_parts.publish(parts_msg)
+            # 수량 배열 (-1 = 미인식)
+            msg_counts = Int32MultiArray()
+            msg_counts.data = [p['count'] for p in r['parts']]
+            self.pub_part_counts.publish(msg_counts)
 
-        counts_msg = Int32MultiArray()
-        counts_msg.data = [
-            int(item.get('count', -1))
-            for item in parts
-            if isinstance(item, dict)
-        ]
-        self.pub_part_counts.publish(counts_msg)
-
-        recognized_msg = Bool()
-        recognized_msg.data = bool(
-            result.get('latest_screen_detected', False)
-            and parts
-            and all(
-                isinstance(item, dict) and int(item.get('count', -1)) >= 0
-                for item in parts
+            # 인식 완료: 화면 감지 + 모든 수량이 유효(-1 없음)
+            recognized = (
+                r.get('latest_screen_detected', False)
+                and all(p['count'] >= 0 for p in r['parts'])
             )
-        )
-        self.pub_recognized.publish(recognized_msg)
+            msg_recog = Bool()
+            msg_recog.data = recognized
+            self.pub_recognized.publish(msg_recog)
+        elif self._sequence_mode:
+            # Peg1..PegN 부품명 JSON
+            msg_seq = String()
+            msg_seq.data = json.dumps(r['sequence'], ensure_ascii=False)
+            self.pub_sequence.publish(msg_seq)
 
-    @staticmethod
-    def _parts_payload(result: dict) -> tuple[list[str], list[int]]:
-        names = []
-        counts = []
-        for item in result.get('parts', []) or []:
-            if not isinstance(item, dict):
-                continue
-            names.append(str(item.get('name', '')))
-            try:
-                counts.append(int(item.get('count', -1)))
-            except (TypeError, ValueError):
-                counts.append(-1)
-        return names, counts
+            # 부품명 코드 배열 (PART_NAMES 인덱스+1, 미인식=-1)
+            msg_codes = Int32MultiArray()
+            msg_codes.data = [
+                PART_NAMES.index(n) + 1 if n in PART_NAMES else -1
+                for n in r['sequence']
+            ]
+            self.pub_sequence_codes.publish(msg_codes)
 
-    @staticmethod
-    def _all_counts_recognized(result: dict | None) -> bool:
-        if result is None:
-            return False
-        names, counts = MonitorOCRNode._parts_payload(result)
-        return bool(names) and all(count >= 0 for count in counts)
-
-    @staticmethod
-    def _fill_task_list_response(response, result: dict | None, success: bool, message: str):
-        response.success = bool(success)
-        response.message = message
-
-        if result is None:
-            response.screen_detected = False
-            response.all_counts_recognized = False
-            response.frames_used = 0
-            response.parts = []
-            return response
-
-        names, counts = MonitorOCRNode._parts_payload(result)
-        response.screen_detected = bool(result.get('latest_screen_detected', False))
-        response.all_counts_recognized = MonitorOCRNode._all_counts_recognized(result)
-        response.frames_used = int(result.get('frames_used', 0) or 0)
-        response.parts = [
-            TaskItem(name=name, count=count)
-            for name, count in zip(names, counts)
-        ]
-        return response
-
-    def _handle_get_task_list(self, request, response):
-        with self._task_list_request_lock:
-            if self._task_list_request_active:
-                return self._fill_task_list_response(
-                    response,
-                    None,
-                    False,
-                    'another task_list request is already running',
-                )
-            self._task_list_request_active = True
-
-        latest_seen = None
-        try:
-            timeout_sec = float(request.timeout_sec)
-            if timeout_sec <= 0.0:
-                timeout_sec = self._task_list_service_timeout_sec
-
-            frame_count = int(request.frame_count)
-            if frame_count <= 0:
-                frame_count = self._task_list_service_frame_count
-
-            with self._result_condition:
-                start_seq = self._latest_result_seq
-                if hasattr(self._aggregator, 'reset'):
-                    with self._aggregator_lock:
-                        self._aggregator.reset()
-
-            with self._lock:
-                self._pending_img = None
-                self._force_next_frame = True
-
-            deadline = time.monotonic() + max(0.1, timeout_sec)
-            while time.monotonic() < deadline:
-                with self._result_condition:
-                    remaining = max(0.0, deadline - time.monotonic())
-                    self._result_condition.wait(timeout=min(0.2, remaining))
-                    if self._latest_result_seq <= start_seq:
-                        continue
-                    latest_seen = self._latest_result
-
-                frames_used = int(latest_seen.get('frames_used', 0) or 0)
-                if frames_used >= frame_count:
-                    all_counts_recognized = self._all_counts_recognized(latest_seen)
-                    screen_detected = bool(latest_seen.get('latest_screen_detected', False))
-                    success = bool(screen_detected and all_counts_recognized)
-                    message = (
-                        'task list ready' if success
-                        else 'task list OCR completed with unrecognized counts'
-                    )
-                    return self._fill_task_list_response(
-                        response, latest_seen, success, message)
-
-            return self._fill_task_list_response(
-                response,
-                latest_seen,
-                False,
-                f'task_list OCR timed out before collecting {frame_count} frames',
+            # 인식 완료: 화면 감지 + 모든 Peg 인식(빈 문자열 없음)
+            recognized = (
+                r.get('latest_screen_detected', False)
+                and all(n for n in r['sequence'])
             )
-        finally:
-            with self._lock:
-                self._force_next_frame = False
-                self._pending_img = None
-            with self._task_list_request_lock:
-                self._task_list_request_active = False
+            msg_recog = Bool()
+            msg_recog.data = recognized
+            self.pub_recognized.publish(msg_recog)
+        else:
+            # 미션 포인트 배열 (-1 = 미인식)
+            msg_pts = Int32MultiArray()
+            msg_pts.data = [p if p is not None else -1 for p in r['mission_points']]
+            self.pub_points.publish(msg_pts)
+
+            # 버튼 상태
+            msg_btn = Bool()
+            msg_btn.data = r['btn_active']
+            self.pub_btn.publish(msg_btn)
+
+            # 제목
+            msg_title = String()
+            msg_title.data = r['title']
+            self.pub_title.publish(msg_title)
 
 
 # ─── 진입점 ──────────────────────────────────────────────────────────────────
@@ -345,17 +284,13 @@ class MonitorOCRNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MonitorOCRNode()
-    executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(node)
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        executor.shutdown()
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

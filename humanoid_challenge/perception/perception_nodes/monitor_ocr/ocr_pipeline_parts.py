@@ -7,19 +7,21 @@
   │    ...   │  ...    │  ... │
   └─────────────────────────────┘
 
-테이블 행 순서는 고정된 PART_NAMES 순서를 사용한다.
+행 순서가 바뀌어도 한국어 OCR로 부품명을 인식해 매핑.
+출력은 항상 PART_NAMES 순서로 정렬.
 
 열 구분: Hough 수직선 자동 감지 → 실패 시 기본값 폴백
-OCR:    수량=영어 det=True + 0~5 클램핑
+OCR:    이름=한국어 det=False + 퍼지 매칭 / 수량=영어 det=True + 0~5 클램핑
 """
 import cv2
+import difflib
 import numpy as np
-import os
 import re
 import time
+import os
 
-from ament_index_python.packages import get_package_share_directory
-from perception_nodes.monitor_ocr.paddle_ocr import ocr_run
+from perception_nodes.monitor_ocr.ocr_pipeline import find_display, find_display_yolo
+from perception_nodes.monitor_ocr.paddle_ocr import ocr_recog_only, ocr_run
 
 
 # ── 부품 이름 ──────────────────────────────────────────────────────────────────
@@ -30,131 +32,21 @@ N_ROWS = len(PART_NAMES)
 _NAME_X  = (0.19, 0.76)
 _COUNT_X = (0.76, 0.99)
 
+# ── 업스케일 배율 ──────────────────────────────────────────────────────────────
+_SC_NAME  = 4
+_SC_COUNT = 6
+
 # ── 행 y 패딩 ───────────────────────────────────────────────────────────────────
 _ROW_PAD        = 0.018  # 이름 크롭: 위아래 패딩 (행 경계선 제외)
+_COUNT_TOP_PAD  = 0.018  # 수량 크롭: 상단 패딩 (= _ROW_PAD; 이전 행 블리드는 최하단 숫자 선택으로 처리)
 _COUNT_BOT_EXT  = 0.12   # 수량 크롭: 하단 확장 (카메라 각도로 숫자가 셀 하단~다음 행 초입에 위치)
 
 # ── OCR confidence 임계값 ──────────────────────────────────────────────────────
+_NAME_CONF_THRESH  = 0.1   # 한국어 이름 토큰 최소 confidence
 _COUNT_CONF_THRESH = 0.2   # 수량 숫자 최소 confidence
 
 # ── 유효 수량 범위 ─────────────────────────────────────────────────────────────
 _VALID_COUNTS = list(range(6))  # 0~5
-
-# ── 모니터 감지 ───────────────────────────────────────────────────────────────
-# YOLO warp 출력 크기. 부품 수량 테이블 감지에만 사용한다.
-_FALLBACK_BBOX = (58, 30, 406, 216)
-_WARP_W = _FALLBACK_BBOX[2]
-_WARP_H = int(_FALLBACK_BBOX[3] * 1.4)
-_yolo_model = None
-
-
-def default_yolo_model_path() -> str:
-    """설치된 perception 패키지 기준 기본 monitor OCR YOLO 모델 경로."""
-    return os.path.join(
-        get_package_share_directory('perception'),
-        'model',
-        'monitor_ocr_best.pt',
-    )
-
-
-def load_yolo_model(model_path: str | None = None) -> str | None:
-    """
-    YOLO 세그멘테이션 모델을 로드한다.
-
-    Returns
-    -------
-    str | None
-        로드된 모델 경로. 파일이 없으면 None.
-    """
-    path = model_path or default_yolo_model_path()
-    if not path or not os.path.isfile(path):
-        return None
-
-    global _yolo_model
-    from ultralytics import YOLO
-    _yolo_model = YOLO(path)
-    return path
-
-
-def _sort_quad_corners(pts):
-    """4점을 [TL, TR, BR, BL] 순서로 정렬."""
-    pts = pts.reshape(4, 2)
-    s = pts.sum(axis=1)
-    d = np.diff(pts, axis=1).ravel()
-    return np.array(
-        [pts[s.argmin()], pts[d.argmin()], pts[s.argmax()], pts[d.argmax()]],
-        dtype=np.float32,
-    )
-
-
-def _mask_to_quad(mask_xy):
-    """세그멘테이션 폴리곤을 perspective warp용 사각형으로 변환."""
-    pts = np.array(mask_xy, dtype=np.int32)
-    if len(pts) < 4:
-        return None
-    hull = cv2.convexHull(pts)
-    rect = cv2.minAreaRect(hull)
-    box = cv2.boxPoints(rect).astype(np.float32)
-    return _sort_quad_corners(box)
-
-
-def find_display_yolo(img, conf_thresh=0.50):
-    """
-    YOLO-seg로 모니터를 감지해 정면화한다.
-
-    Returns
-    -------
-    tuple | None
-        (warped_img, bx, by, bw, bh) 또는 None.
-    """
-    if _yolo_model is None:
-        return None
-
-    results = _yolo_model(img, verbose=False)[0]
-    masks = results.masks
-    boxes = results.boxes
-    if masks is None or len(masks.xy) == 0:
-        return None
-
-    best = int(boxes.conf.argmax())
-    if float(boxes.conf[best]) < conf_thresh:
-        return None
-
-    x1, y1, x2, y2 = boxes.xyxy[best].cpu().numpy().astype(int)
-    det_w, det_h = x2 - x1, y2 - y1
-    if det_h == 0 or det_w / det_h > 6.0:
-        return None
-
-    corners = _mask_to_quad(masks.xy[best])
-    if corners is None:
-        corners = np.array(
-            [[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32
-        )
-
-    dst = np.array(
-        [[0, 0], [_WARP_W - 1, 0], [_WARP_W - 1, _WARP_H - 1], [0, _WARP_H - 1]],
-        dtype=np.float32,
-    )
-    matrix = cv2.getPerspectiveTransform(corners, dst)
-    warped = cv2.warpPerspective(img, matrix, (_WARP_W, _WARP_H))
-    return warped, 0, 0, _WARP_W, _WARP_H
-
-
-def find_display_hsv(img):
-    """HSV 어두운 모니터 영역으로 bbox를 찾는다. 실패 시 None."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h_img = img.shape[0]
-    dark = cv2.inRange(hsv, (0, 0, 0), (180, 255, 70))
-    dark[h_img // 2:, :] = 0
-    k = np.ones((10, 10), np.uint8)
-    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, k)
-    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, k)
-    cnts, _ = cv2.findContours(dark, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return None
-    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
-    y_end = min(y + int(h * 1.35), h_img)
-    return (x, y, w, y_end - y)
 
 
 # ── 화면 감지 ─────────────────────────────────────────────────────────────────
@@ -178,17 +70,6 @@ def _trim_bbox_bottom(img: np.ndarray, bbox, bright_thresh: int = 180) -> tuple:
     return bbox
 
 
-def _bbox_center_inside(inner, outer) -> bool:
-    """inner bbox 중심점이 outer bbox 안에 있는지 확인."""
-    if outer is None:
-        return True
-    x, y, w, h = inner
-    ox, oy, ow, oh = outer
-    cx = x + w / 2
-    cy = y + h / 2
-    return ox <= cx <= ox + ow and oy <= cy <= oy + oh
-
-
 def find_display_parts(img: np.ndarray):
     """
     흰색 테이블 영역 감지.
@@ -205,21 +86,14 @@ def find_display_parts(img: np.ndarray):
 
     cnts, _ = cv2.findContours(bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    monitor_bbox = find_display_hsv(img)
     candidates = []
     for cnt in cnts:
         x, y, w, h = cv2.boundingRect(cnt)
-        bbox = (x, y, w, h)
-        if (
-            w > w_img * 0.20
-            and h > h_img * 0.15
-            and w > h * 1.3
-            and _bbox_center_inside(bbox, monitor_bbox)
-        ):
+        if w > w_img * 0.20 and h > h_img * 0.15 and w > h * 1.3:
             candidates.append((cv2.contourArea(cnt), (x, y, w, h)))
 
     if not candidates:
-        return monitor_bbox
+        return find_display(img)
 
     # 열 구분선이 감지되는 후보 중 가장 큰 것 우선
     candidates.sort(key=lambda c: c[0], reverse=True)
@@ -288,7 +162,8 @@ def _detect_column_ratios(table_img: np.ndarray):
     if not count_seps:
         return _NAME_X, _COUNT_X
 
-    sep2 = count_seps[0]
+    # count_seps[-1]: 가장 오른쪽 구분선 사용 (이름 영역 내부 오검출 제외)
+    sep2 = count_seps[-1]
     # icon_seps 없으면 기본값 사용 (아이콘 열 폭 고정)
     sep1 = icon_seps[0] if icon_seps else _NAME_X[0]
     if sep1 >= sep2:
@@ -372,6 +247,15 @@ def _preprocess(img: np.ndarray, scale: int) -> np.ndarray:
     return cv2.addWeighted(img, 1.5, blur, -0.5, 0)
 
 
+def _preprocess_binarize(img: np.ndarray, scale: int) -> np.ndarray:
+    """조명 불균일 환경용 적응형 이진화."""
+    img  = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10)
+    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+
 # ── 파싱 헬퍼 ─────────────────────────────────────────────────────────────────
 
 def _extract_count(text: str) -> int:
@@ -389,9 +273,70 @@ def _extract_count(text: str) -> int:
     return min(_VALID_COUNTS, key=lambda x: abs(x - int(m.group())))
 
 
+def _match_part_name(raw: str) -> str:
+    """OCR 텍스트를 PART_NAMES 중 가장 유사한 이름으로 확정."""
+    if not raw:
+        return ""
+    return max(PART_NAMES, key=lambda n: difflib.SequenceMatcher(None, raw.strip(), n).ratio())
+
+
+# ── 행별 OCR ──────────────────────────────────────────────────────────────────
+
+def _row_crop(img, bx, by, bw, bh, row, H, W, x_ratio, row_ys=None, bot_pad=None, extra_bot=0.0, top_pad=None):
+    top_pad = _ROW_PAD if top_pad is None else top_pad
+    bot_pad = _ROW_PAD if bot_pad is None else bot_pad
+    ry1 = (row_ys[row]     if row_ys else row / N_ROWS)     + top_pad
+    ry2 = (row_ys[row + 1] if row_ys else (row + 1) / N_ROWS) - bot_pad + extra_bot
+    y1  = max(0, int(by + ry1 * bh))
+    y2  = min(H, int(by + ry2 * bh))
+    x1  = max(0, int(bx + x_ratio[0] * bw))
+    x2  = min(W, int(bx + x_ratio[1] * bw))
+    return img[y1:y2, x1:x2]
+
+
+_NAME_MATCH_THRESH = 0.60  # 퍼지 매칭 최소 ratio; 미달 시 위치 기반 폴백
+
+def _recog_name(ocr_kor, crop: np.ndarray) -> tuple:
+    """이름 crop → 한국어 인식 → PART_NAMES 퍼지 매칭. (name, ratio) 반환."""
+    best_ratio, best_name = 0.0, ""
+    for preproc in (_preprocess, _preprocess_binarize):
+        results = ocr_recog_only(ocr_kor, preproc(crop, _SC_NAME))
+        tokens  = [t for t, c in results if c > _NAME_CONF_THRESH]
+        if not tokens:
+            continue
+        raw     = " ".join(tokens)
+        matched = _match_part_name(raw)
+        ratio   = difflib.SequenceMatcher(None, raw, matched).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_name = ratio, matched
+    return best_name, best_ratio
+
+
+def _recog_count(ocr_en, crop: np.ndarray) -> int:
+    """수량 crop → 영어 OCR(det=True) → 0~5 정수. 실패 시 -1.
+
+    crop에 이전 행 숫자가 상단에 블리드될 수 있으므로,
+    가장 하단에 위치한 유효 숫자를 채택한다.
+    """
+    for scale in (4, 2, 6):
+        proc = _preprocess(crop, scale)
+        candidates = []
+        for box, (text, conf) in ocr_run(ocr_en, proc):
+            if conf < _COUNT_CONF_THRESH:
+                continue
+            v = _extract_count(text)
+            if v < 0:
+                continue
+            bottom_y = max(pt[1] for pt in box)
+            candidates.append((bottom_y, v))
+        if candidates:
+            return max(candidates, key=lambda x: x[0])[1]
+    return -1
+
+
 # ── 메인 처리 ─────────────────────────────────────────────────────────────────
 
-def process_frame_parts(ocr_en, img: np.ndarray) -> dict:
+def process_frame_parts(ocr_kor, ocr_en, img: np.ndarray) -> dict:
     """
     부품 수량 테이블 OCR.
 
@@ -406,15 +351,23 @@ def process_frame_parts(ocr_en, img: np.ndarray) -> dict:
     """
     t0 = time.time()
 
-    # YOLO로 모니터 감지 + 정면화 → 실패 시 원본 이미지에서 테이블 영역 감지
+    # YOLO로 모니터 감지 + 정면화 → 실패 시 원본 이미지 사용
     yolo = find_display_yolo(img)
     work_img = yolo[0] if yolo is not None else img
     H, W = work_img.shape[:2]
 
+    bbox = find_display_parts(work_img)
+
     if yolo is not None:
-        bbox = yolo[1:]
-    else:
-        bbox = find_display_parts(work_img)
+        # YOLO warp: 너비는 항상 전체 사용 (측면 각도 수량 컬럼 잘림 방지)
+        # 하단(받침대/바닥) 오감지 또는 너비 부족 시 warp 상단 80% 폴백
+        if bbox:
+            bx0, by0, bw0, bh0 = bbox
+        else:
+            bx0, by0, bw0, bh0 = 0, H, W, 0  # force fallback below
+        if by0 > H * 0.40 or bw0 < W * 0.70:
+            bx0, by0, bw0, bh0 = 0, 0, W, int(H * 0.80)
+        bbox = (0, by0, W, bh0)
 
     if not bbox:
         return {
@@ -432,6 +385,53 @@ def process_frame_parts(ocr_en, img: np.ndarray) -> dict:
     bh  = min(H - by, bh + row_ext)
     table_crop      = work_img[by:by+bh, bx:bx+bw]
     name_x, count_x = _detect_column_ratios(table_crop)
+    DEBUG_DIR = "/captures/monitor_ocr_debug"
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+    cv2.imwrite(os.path.join(DEBUG_DIR, "00_work_img.png"), work_img)
+    cv2.imwrite(os.path.join(DEBUG_DIR, "01_table_crop.png"), table_crop)
+
+    # ── 이름 열 전체 OCR (det=True → 박스 y좌표 확보) ────────────────────────
+    nx1 = max(0, int(bx + name_x[0] * bw))
+    nx2 = min(W, int(bx + name_x[1] * bw))
+    name_col = work_img[by:by+bh, nx1:nx2]
+    cv2.imwrite(os.path.join(DEBUG_DIR, "02_name_col.png"), name_col)
+
+    # 같은 행의 분리된 토큰을 y좌표 기준으로 묶어 합칩니다.
+    # ("기어"+"링" → "기어 링", "플랜지"+"너트" → "플랜지 너트" 등)
+    _ROW_H = 1.0 / N_ROWS
+    # (y_ratio, [(x_pixel, text), ...])  — x픽셀 순 정렬로 단어 순서 보존
+    row_groups: list[tuple[float, list]] = []
+    for scale in (_SC_NAME, 2):
+        proc = _preprocess(name_col, scale)
+        for box, (text, conf) in ocr_run(ocr_kor, proc):
+            if conf < _NAME_CONF_THRESH:
+                continue
+            y = sum(pt[1] for pt in box) / 4 / scale / bh
+            x = sum(pt[0] for pt in box) / 4  # x 중심(스케일 픽셀)
+            grp = next((i for i, (gy, _) in enumerate(row_groups)
+                        if abs(gy - y) < _ROW_H * 0.5), None)
+            if grp is None:
+                row_groups.append((y, [(x, text.strip())]))
+            else:
+                gy, tokens = row_groups[grp]
+                tokens.append((x, text.strip()))
+                row_groups[grp] = ((gy + y) / 2, tokens)
+        if len(row_groups) >= N_ROWS:
+            break
+
+    # 합쳐진 텍스트를 PART_NAMES로 매칭 (토큰을 x 순서로 합산)
+    names_y: list[tuple[float, str]] = []
+    for y, tokens in sorted(row_groups, key=lambda x: x[0]):
+        combined = " ".join(t for _, t in sorted(tokens, key=lambda p: p[0]))
+        matched = _match_part_name(combined)
+        ratio   = difflib.SequenceMatcher(None, combined, matched).ratio()
+        if ratio < _NAME_MATCH_THRESH:
+            continue
+        dup = next((i for i, (_, n) in enumerate(names_y) if n == matched), None)
+        if dup is None:
+            names_y.append((y, matched))
+    names_y.sort(key=lambda x: x[0])
 
     # ── 수량 열 전체 OCR (det=True → 박스 y좌표 확보) ────────────────────────
     cx1 = max(0, int(bx + count_x[0] * bw))
@@ -439,12 +439,17 @@ def process_frame_parts(ocr_en, img: np.ndarray) -> dict:
     # 마지막 행 숫자가 bbox 하단에 걸릴 수 있으므로 아래로 확장
     cy2 = min(H, by + bh + int(bh * _COUNT_BOT_EXT))
     count_col = work_img[by:cy2, cx1:cx2]
+    cv2.imwrite(os.path.join(DEBUG_DIR, "03_count_col.png"), count_col)
 
-    best_partial: list[tuple[float, int, float]] = []
-    counts = [-1] * N_ROWS
+    debug_vis = work_img.copy()
+    cv2.rectangle(debug_vis, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+    cv2.rectangle(debug_vis, (nx1, by), (nx2, by + bh), (255, 0, 0), 2)
+    cv2.rectangle(debug_vis, (cx1, by), (cx2, cy2), (0, 0, 255), 2)
+    cv2.imwrite(os.path.join(DEBUG_DIR, "04_debug_boxes.png"), debug_vis)
+
+    counts_y: list[tuple[float, int]] = []  # (y_ratio, count)
     for scale in (4, 2, 6):
         proc = _preprocess(count_col, scale)
-        candidates: list[tuple[float, int, float]] = []
         for box, (text, conf) in ocr_run(ocr_en, proc):
             if conf < _COUNT_CONF_THRESH:
                 continue
@@ -452,42 +457,69 @@ def process_frame_parts(ocr_en, img: np.ndarray) -> dict:
             if v < 0:
                 continue
             y_center = sum(pt[1] for pt in box) / 4 / scale / bh
-            candidates.append((y_center, v, float(conf)))
-
-        candidates.sort(key=lambda item: item[0])
-        deduped: list[tuple[float, int, float]] = []
-        for y_center, value, conf in candidates:
-            if deduped and abs(y_center - deduped[-1][0]) < 0.08:
-                if conf > deduped[-1][2]:
-                    deduped[-1] = (y_center, value, conf)
-            else:
-                deduped.append((y_center, value, conf))
-
-        if len(deduped) > len(best_partial):
-            best_partial = deduped
-        if len(deduped) >= N_ROWS:
-            counts = [value for _, value, _ in deduped[:N_ROWS]]
+            counts_y.append((y_center, v))
+        if len(counts_y) >= N_ROWS:
             break
 
-    if all(count < 0 for count in counts) and best_partial:
-        row_best: list[tuple[float, int]] = [(-1.0, -1) for _ in range(N_ROWS)]
-        for y_center, value, conf in best_partial:
-            row = int(round(y_center * N_ROWS - 0.5))
-            row = min(max(row, 0), N_ROWS - 1)
-            if conf > row_best[row][0]:
-                row_best[row] = (conf, value)
-        counts = [value for _, value in row_best]
+    # y가 너무 가까운 중복 탐지 제거 (행 높이 절반 이내)
+    counts_y.sort(key=lambda x: x[0])
+    deduped: list[tuple[float, int]] = []
+    for y, v in counts_y:
+        if not deduped or y - deduped[-1][0] > 0.5 / N_ROWS:
+            deduped.append((y, v))
+    counts_y = deduped
+
+    # ── 수량 y위치 기반 행별 이름 보완 인식 ─────────────────────────────────────
+    # 이름 열 전체 OCR로 충분히 잡지 못했을 때(극단적 측면 각도 등) 보완
+    # 수량 위치를 앵커로 사용하므로 임계값을 낮게 설정
+    if len(names_y) < len(counts_y) - 1 and len(counts_y) >= 2:
+        half_row_px = int(bh / N_ROWS * 0.55)
+        names_guided: list[tuple[float, str]] = []
+        for y_c, _ in counts_y:
+            y_px = int(y_c * bh)
+            y1 = max(0, by + y_px - half_row_px)
+            y2 = min(H, by + y_px + half_row_px)
+            row_crop = work_img[y1:y2, nx1:nx2]
+            if row_crop.size == 0:
+                continue
+            matched, ratio = _recog_name(ocr_kor, row_crop)
+            if ratio >= 0.45:  # 행별 크롭이라 낮은 임계값 허용
+                dup = next((i for i, (_, n) in enumerate(names_guided) if n == matched), None)
+                if dup is None:
+                    names_guided.append((y_c, matched))
+        # count 앵커 기반이라 전체 OCR 결과보다 위치 정합성이 높음 → 교체
+        if len(names_guided) >= 1:
+            names_y = sorted(names_guided, key=lambda x: x[0])
+
+    # ── 최적 skip 오프셋으로 1:1 매칭 ───────────────────────────────────────────
+    # counts < names 일 때(특정 행 수량 미감지) 최적 시작 오프셋을 y-거리로 결정
+    name_to_count: dict[str, int] = {}
+    n_c, n_n = len(counts_y), len(names_y)
+    if n_c > 0 and n_n > 0:
+        if n_c >= n_n:
+            for (_, nm), (_, cnt) in zip(names_y, counts_y):
+                name_to_count[nm] = cnt
+        else:
+            n_skip = n_n - n_c
+            best_skip, best_err = 0, float('inf')
+            for skip in range(n_skip + 1):
+                if skip + n_c > n_n:
+                    break
+                err = sum((names_y[skip + i][0] - counts_y[i][0]) ** 2
+                          for i in range(n_c))
+                if err < best_err:
+                    best_err, best_skip = err, skip
+            for i, (_, cnt) in enumerate(counts_y):
+                name_to_count[names_y[best_skip + i][1]] = cnt
+
+    # 미인식 부품 → -1
+    for part in PART_NAMES:
+        name_to_count.setdefault(part, -1)
 
     return {
         "screen_detected": True,
         "bbox": [bx, by, bw, bh],
-        "col_ratios": {
-            "name_x": list(name_x),
-            "count_x": list(count_x),
-        },
-        "parts": [
-            {"name": name, "count": count}
-            for name, count in zip(PART_NAMES, counts)
-        ],
+        "col_ratios": {"name_x": list(name_x), "count_x": list(count_x)},
+        "parts": [{"name": n, "count": name_to_count[n]} for n in PART_NAMES],
         "elapsed_ms": round((time.time() - t0) * 1000, 1),
     }

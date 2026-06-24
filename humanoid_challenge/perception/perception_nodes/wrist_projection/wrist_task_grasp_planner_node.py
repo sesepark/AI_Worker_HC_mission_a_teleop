@@ -538,8 +538,7 @@ class WristTaskGraspPlannerNode(Node):
         self.get_logger().info(
             f'SELECT [{best.canonical_class}] score={best.score:.3f} '
             f'conf={float(best.det.confidence):.2f} pts={best.point_count} '
-            f'-> {self.base_frame} ({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) m',
-            throttle_duration_sec=1.0,
+            f'-> {self.base_frame} ({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) m'
         )
 
     def _select_stable_candidate(
@@ -863,18 +862,11 @@ class WristTaskGraspPlannerNode(Node):
         timeout_sec: float,
         warn: bool,
     ) -> Optional[np.ndarray]:
-        stamp = self.latest_depth_stamp
-
-        is_zero = (stamp.sec == 0 and stamp.nanosec == 0)
-        lookup_time = rclpy.time.Time()
-        use_latest_lookup = is_zero and self.use_latest_tf_on_zero_stamp
-
-        if not use_latest_lookup:
-            lookup_time = rclpy.time.Time.from_msg(stamp)
+        lookup_time = rclpy.time.Time()  # latest TF
 
         pt = PointStamped()
         pt.header.frame_id = self.rgb_frame
-        pt.header.stamp = stamp
+        pt.header.stamp = lookup_time.to_msg()
         pt.point.x = float(point_color[0])
         pt.point.y = float(point_color[1])
         pt.point.z = float(point_color[2])
@@ -886,39 +878,17 @@ class WristTaskGraspPlannerNode(Node):
                 lookup_time,
                 timeout=rclpy.duration.Duration(seconds=timeout_sec)
             )
-
         except (
             tf2_ros.LookupException,
             tf2_ros.ConnectivityException,
             tf2_ros.ExtrapolationException,
         ) as exc:
-            if not use_latest_lookup:
-                try:
-                    tf = self.tf_buffer.lookup_transform(
-                        self.base_frame,
-                        self.rgb_frame,
-                        rclpy.time.Time(),
-                        timeout=rclpy.duration.Duration(seconds=timeout_sec)
-                    )
-                except (
-                    tf2_ros.LookupException,
-                    tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException,
-                ) as latest_exc:
-                    if warn:
-                        self.get_logger().warn(
-                            f'TF {self.rgb_frame} -> {self.base_frame} failed: '
-                            f'{exc}; latest fallback failed: {latest_exc}',
-                            throttle_duration_sec=5.0
-                        )
-                    return None
-            else:
-                if warn:
-                    self.get_logger().warn(
-                        f'TF {self.rgb_frame} -> {self.base_frame} failed: {exc}',
-                        throttle_duration_sec=5.0
-                    )
-                return None
+            if warn:
+                self.get_logger().warn(
+                    f'TF {self.rgb_frame} -> {self.base_frame} failed: {exc}',
+                    throttle_duration_sec=5.0
+                )
+            return None
 
         pb = do_transform_point(pt, tf)
         return np.asarray([pb.point.x, pb.point.y, pb.point.z], dtype=np.float64)
