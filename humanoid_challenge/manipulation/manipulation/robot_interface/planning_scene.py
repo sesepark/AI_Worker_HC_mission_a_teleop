@@ -12,6 +12,7 @@ import os
 import yaml
 from math import sqrt
 
+from ament_index_python.packages import get_package_share_directory
 from manipulation.robot_interface.moveit_client import MoveItClient
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import ColorRGBA
@@ -23,12 +24,9 @@ FRAME_ID = "base_link"
 _ALLOW_COLLISIONS_TIMEOUT_SEC = 2.0
 _SPIN_TIMEOUT_SEC              = 0.05
 
-_DESK_CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'config', 'desk.yaml'
-)
-_ZONE_A_CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'config', 'zone_a.yaml'
-)
+PACKAGE_SHARE_DIR = get_package_share_directory("manipulation")
+_DESK_CONFIG_PATH = os.path.join(PACKAGE_SHARE_DIR, "config", "desk.yaml")
+_ZONE_A_CONFIG_PATH = os.path.join(PACKAGE_SHARE_DIR, "config", "zone_a.yaml")
 
 
 def _load_zone_a_config() -> dict:
