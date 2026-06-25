@@ -1,0 +1,14 @@
+# Topology dump (read-only) — generated for MANIPULATION_INTEGRATION_ANALYSIS.md
+## merge-base(integration/mission-a, origin/feature/mission-a)
+56ee5586c05e3cfb88875eca2949d9d9b6da6df9
+
+## manip commits since merge-base: <MB>..origin/feature/mission-a
+bcc8b04 [manipulation] Mission B wait_until_ready 변경
+e65cf34 [manipulation] Mission B joint move
+9ba1341 [manipulation] mission B motion save
+e8a14b6 [manipulation] Mission B filter 적용 및 pose 탐색
+a212bbc Set ZED-M grab resolution to HD720
+3c417df [manipulation] Mission C 테스트 파일 및 arm selector 추가
+525546d [manipulation] pick_skill 버그 픽스, config 경로 이동, robot_interface/tests 업데이트
+
+## NOTE: local feature/mission-a is a STALE ancestor (HEAD=9eb3b2c); merge-base(integration, local feature)=9eb3b2c == its own HEAD.

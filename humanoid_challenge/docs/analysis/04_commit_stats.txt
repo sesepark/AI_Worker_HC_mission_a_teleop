@@ -1,0 +1,110 @@
+########## 525546d ##########
+525546d [manipulation] pick_skill 버그 픽스, config 경로 이동, robot_interface/tests 업데이트
+ .../{ => manipulation}/config/desk.yaml            |    0
+ .../{ => manipulation}/config/poses.yaml           |    0
+ .../{ => manipulation}/config/zone_a.yaml          |    0
+ .../robot_interface/gripper_command.py             |   21 +-
+ .../manipulation/robot_interface/moveit_dual.py    |    2 +-
+ .../robot_interface/moveit_dual_client.py          | 1644 --------------------
+ .../manipulation/robot_interface/planning_scene.py |    4 +-
+ .../robot_interface/planning_scene_b.py            |    4 +-
+ .../robot_interface/planning_scene_b_pick.py       |    4 +-
+ .../robot_interface/planning_scene_b_place.py      |    4 +-
+ .../manipulation/skill_primitives/pick_skill.py    |    7 +-
+ .../skill_primitives/planning_filter.py            |    2 +-
+ .../tests/test_compute_capture_pose.py             |    2 +-
+ .../manipulation/tests/test_dual_box.py            |    2 +-
+ .../manipulation/tests/test_dual_home.py           |    2 +-
+ .../manipulation/tests/test_dual_pick.py           |    2 +-
+ .../manipulation/tests/test_dual_place.py          |    2 +-
+ .../tests/test_move_to_capture_pose.py             |    2 +-
+ .../tests/test_pick_with_perception.py             |    2 +-
+ .../manipulation/manipulation/tests/test_zone_b.py |    4 +-
+ .../manipulation/tests/test_zone_b_pick.py         |    4 +-
+ .../manipulation/tests/test_zone_b_place.py        |    4 +-
+ humanoid_challenge/manipulation/setup.py           |   12 +-
+ 23 files changed, 32 insertions(+), 1698 deletions(-)
+
+########## 3c417df ##########
+3c417df [manipulation] Mission C 테스트 파일 및 arm selector 추가
+ .../manipulation/robot_interface/planning_scene.py |  11 ++
+ .../skill_primitives/mission_c_arm_selector.py     |   8 ++
+ .../manipulation/tests/MissionC/__init__.py        |   0
+ .../manipulation/tests/MissionC/test_base_C.py     |  55 +++++++++
+ .../tests/MissionC/test_capture_to_pick_C.py       |  55 +++++++++
+ .../manipulation/tests/MissionC/test_pick_C.py     |  99 +++++++++++++++
+ .../manipulation/tests/MissionC/test_place_C.py    | 135 +++++++++++++++++++++
+ humanoid_challenge/manipulation/setup.py           |   4 +
+ 8 files changed, 367 insertions(+)
+
+########## a212bbc ##########
+a212bbc Set ZED-M grab resolution to HD720
+ ai_worker/ffw_bringup/config/common/zedm.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+########## e8a14b6 ##########
+e8a14b6 [manipulation] Mission B filter 적용 및 pose 탐색
+ humanoid_challenge/docker/docker-compose.yml       |   3 +-
+ .../manipulation/config/zone_b_pick.yaml           |  23 -
+ .../manipulation/config/zone_b_place.yaml          |  15 -
+ .../manipulation/robot_interface/moveit_dual.py    | 323 ++++++++-
+ .../robot_interface/planning_scene_b.py            |  23 +-
+ .../robot_interface/planning_scene_b_pick.py       |  23 +-
+ .../robot_interface/planning_scene_b_place.py      |  23 +-
+ .../skill_primitives/planning_filter_dual.py       | 318 +++++++++
+ .../manipulation/tests/test_dual_box.py            |  21 -
+ .../manipulation/tests/test_dual_home.py           | 299 ++-------
+ .../manipulation/tests/test_dual_pick.py           | 720 +++------------------
+ .../manipulation/tests/test_dual_pick_check.py     | 248 +++++++
+ .../manipulation/tests/test_dual_place.py          | 684 ++------------------
+ .../manipulation/manipulation/tests/test_pick.py   |   2 +-
+ .../manipulation/manipulation/tests/test_zone_b.py |   4 +-
+ .../manipulation/tests/test_zone_b_pick.py         |  22 +-
+ .../manipulation/tests/test_zone_b_place.py        |  22 +-
+ humanoid_challenge/manipulation/setup.py           |   1 +
+ 18 files changed, 1092 insertions(+), 1682 deletions(-)
+
+########## 9ba1341 ##########
+9ba1341 [manipulation] mission B motion save
+ .../dual_motion_records/test_dual_pick_motion.json | 4869 +++++++++++++++++++
+ .../test_dual_pick_motion_20260624_050544.json     | 4981 ++++++++++++++++++++
+ .../test_dual_pick_motion_20260624_050705.json     | 4869 +++++++++++++++++++
+ .../manipulation/robot_interface/dual_motion_io.py |  311 ++
+ .../{moveit_dual.py => moveit_dual_client.py}      |    8 +-
+ .../skill_primitives/planning_filter_dual.py       |    2 +-
+ .../manipulation/tests/test_dual_box.py            |    4 +-
+ .../manipulation/tests/test_dual_home.py           |    2 +-
+ .../manipulation/tests/test_dual_motion_save.py    |  299 ++
+ .../manipulation/tests/test_dual_pick.py           |    2 +-
+ .../manipulation/tests/test_dual_pick_check.py     |    2 +-
+ .../tests/test_dual_pick_using_motion.py           |  257 +
+ .../manipulation/tests/test_dual_place.py          |    2 +-
+ humanoid_challenge/manipulation/setup.py           |    2 +
+ 14 files changed, 15599 insertions(+), 11 deletions(-)
+
+########## e65cf34 ##########
+e65cf34 [manipulation] Mission B joint move
+ .../manipulation/config/zone_b_pick.yaml           |   8 +-
+ .../manipulation/config/zone_b_pick_pose.yaml      |   7 +
+ .../robot_interface/left_arm_torque_pose.py        | 662 +++++++++++++++++++++
+ .../robot_interface/planning_scene_b_pick.py       |  58 +-
+ .../robot_interface/planning_scene_b_pick_pose.py  | 122 ++++
+ .../manipulation/tests/test_dual_pick.py           |  26 +-
+ .../manipulation/tests/test_dual_pick_joint.py     | 502 ++++++++++++++++
+ .../manipulation/tests/test_zone_b_pick_pose.py    |  66 ++
+ humanoid_challenge/manipulation/setup.py           |   3 +
+ 9 files changed, 1439 insertions(+), 15 deletions(-)
+
+########## bcc8b04 ##########
+bcc8b04 [manipulation] Mission B wait_until_ready 변경
+ .../manipulation/tests/test_dual_box.py            | 451 ------------------
+ .../manipulation/tests/test_dual_home.py           |   2 +-
+ .../manipulation/tests/test_dual_pick.py           | 397 ++++++++++++++--
+ .../manipulation/tests/test_dual_pick_check.py     |   2 +-
+ .../manipulation/tests/test_dual_pick_joint.py     | 502 ---------------------
+ .../manipulation/tests/test_dual_pick_old.py       | 197 ++++++++
+ .../tests/test_dual_pick_using_motion.py           |   4 +-
+ .../manipulation/tests/test_dual_place.py          |   2 +-
+ humanoid_challenge/manipulation/setup.py           |   3 +-
+ 9 files changed, 554 insertions(+), 1006 deletions(-)
+

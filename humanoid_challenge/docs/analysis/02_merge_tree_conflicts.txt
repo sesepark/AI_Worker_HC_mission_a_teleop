@@ -1,0 +1,22 @@
+# git merge-tree --write-tree integration/mission-a origin/feature/mission-a
+# exit code !=0 means conflicts. Conflicted blobs (stage 1/2/3) + CONFLICT messages below.
+9f7297e5aea8c05edf6590e728a34d41c14e7ebf
+100644 0def4ba73a1f10ed8c5b69428fbb6a2581a4a685 1	humanoid_challenge/manipulation/manipulation/robot_interface/moveit_dual.py
+100644 64888945d225922ccdb40658e3e46f69a850ba66 2	humanoid_challenge/manipulation/manipulation/robot_interface/moveit_dual.py
+100644 c19887b1660efb2fc269825e8142a09826f4162f 1	humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene.py
+100644 4f063b398d94c682bd78ce9ff8a2f751e3a9785f 2	humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene.py
+100644 6f99cd94b94ae468041d4965c760d8179f0eaad5 3	humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene.py
+100644 1eb41bacd131cb7123323be2e101bf5bcab68dd5 1	humanoid_challenge/manipulation/setup.py
+100644 353ea0373f6bb5bc00b732bb94892d680981665c 2	humanoid_challenge/manipulation/setup.py
+100644 d29a2e8905754d9ee7abf4286c07805eca740586 3	humanoid_challenge/manipulation/setup.py
+
+CONFLICT (modify/delete): humanoid_challenge/manipulation/manipulation/robot_interface/moveit_dual.py deleted in origin/feature/mission-a and modified in integration/mission-a.  Version integration/mission-a of humanoid_challenge/manipulation/manipulation/robot_interface/moveit_dual.py left in tree.
+Auto-merging humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene.py
+CONFLICT (content): Merge conflict in humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene.py
+Auto-merging humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene_b.py
+Auto-merging humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene_b_pick.py
+Auto-merging humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene_b_place.py
+Auto-merging humanoid_challenge/manipulation/manipulation/skill_primitives/pick_skill.py
+Auto-merging humanoid_challenge/manipulation/setup.py
+CONFLICT (content): Merge conflict in humanoid_challenge/manipulation/setup.py
+## exit=1

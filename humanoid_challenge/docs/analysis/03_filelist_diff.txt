@@ -1,0 +1,29 @@
+# manipulation/ file-set comparison
+## ONLY on origin/feature/mission-a (pending / not yet in integration):
+humanoid_challenge/manipulation/dual_motion_records/test_dual_pick_motion.json
+humanoid_challenge/manipulation/dual_motion_records/test_dual_pick_motion_20260624_050544.json
+humanoid_challenge/manipulation/dual_motion_records/test_dual_pick_motion_20260624_050705.json
+humanoid_challenge/manipulation/manipulation/config/zone_b_pick_pose.yaml
+humanoid_challenge/manipulation/manipulation/robot_interface/dual_motion_io.py
+humanoid_challenge/manipulation/manipulation/robot_interface/left_arm_torque_pose.py
+humanoid_challenge/manipulation/manipulation/robot_interface/planning_scene_b_pick_pose.py
+humanoid_challenge/manipulation/manipulation/skill_primitives/planning_filter_dual.py
+humanoid_challenge/manipulation/manipulation/tests/MissionC/__init__.py
+humanoid_challenge/manipulation/manipulation/tests/MissionC/test_base_C.py
+humanoid_challenge/manipulation/manipulation/tests/MissionC/test_capture_to_pick_C.py
+humanoid_challenge/manipulation/manipulation/tests/MissionC/test_pick_C.py
+humanoid_challenge/manipulation/manipulation/tests/MissionC/test_place_C.py
+humanoid_challenge/manipulation/manipulation/tests/test_dual_motion_save.py
+humanoid_challenge/manipulation/manipulation/tests/test_dual_pick_check.py
+humanoid_challenge/manipulation/manipulation/tests/test_dual_pick_old.py
+humanoid_challenge/manipulation/manipulation/tests/test_dual_pick_using_motion.py
+humanoid_challenge/manipulation/manipulation/tests/test_zone_b_pick_pose.py
+
+## ONLY on integration/mission-a:
+humanoid_challenge/manipulation/config/desk.yaml
+humanoid_challenge/manipulation/config/poses.yaml
+humanoid_challenge/manipulation/config/zone_a.yaml
+humanoid_challenge/manipulation/launch/mission_a_manip.launch.py
+humanoid_challenge/manipulation/manipulation/mission_a_manipulation_server.py
+humanoid_challenge/manipulation/manipulation/robot_interface/moveit_dual.py
+humanoid_challenge/manipulation/manipulation/tests/test_dual_box.py
