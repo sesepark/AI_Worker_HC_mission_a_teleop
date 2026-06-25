@@ -27,7 +27,7 @@ import rclpy
 from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from ai_worker_manipulation.robot_interface.moveit_dual import (
+from manipulation.robot_interface.moveit_dual import (
     ARM_L_JOINTS,
     ARM_R_JOINTS,
     Arm,

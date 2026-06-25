@@ -21,11 +21,11 @@ from manipulation.skill_primitives.place_skill import PlaceSkill, PlaceResult
 ARM        = Arm.RIGHT
 APPROACH_H = 0.05
 
-PLACE_X = 0.270
-PLACE_Y = -0.10
+PLACE_X = 0.300
+PLACE_Y = -0.15
 PLACE_Z = 0.880   # tray 내부 (table 0.800 + tray_floor 0.010 + margin 0.060)
 
-CARRY_Z = 1.150   # place 완료 후 올라갈 carry 높이 → navigation 대기
+CARRY_Z = 1.100   # place 완료 후 올라갈 carry 높이 → navigation 대기
 # ─────────────────────────────────────────────────────────────────────
 
 

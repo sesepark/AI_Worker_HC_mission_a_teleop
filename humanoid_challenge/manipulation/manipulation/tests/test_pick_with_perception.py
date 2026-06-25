@@ -25,9 +25,9 @@ from manipulation.skill_primitives.mission_a_grasp_adapter import build_mission_
 
 ARM = Arm.RIGHT
 
-CAPTURE_JOINTS = [-0.196033, -1.002742, 0.545092, -2.026014, -2.491690, 0.901389, -1.553559]
+CAPTURE_JOINTS = [-0.845728, -1.145170, 1.013616, -1.996687, -2.846256, 0.801760, -1.580400]
 CAPTURE_SETTLE  = 2.0   # 캡쳐 포즈 안정화 대기 (초)
-PERCEPTION_TIMEOUT = 30.0  # 토픽 대기 타임아웃 (초)
+PERCEPTION_TIMEOUT = 100.0  # 토픽 대기 타임아웃 (초)
 CARRY_Z = 1.150
 
 

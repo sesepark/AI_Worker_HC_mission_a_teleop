@@ -131,6 +131,57 @@ class GripperCommand:
             return False
         return True
 
+    # def _send_single(self, side, position):
+    #     """
+    #     Publish a JointTrajectory to one side's controller.
+    #     Arm joints are held at their current positions; only the gripper
+    #     joint is commanded to `position`.
+    #     """
+
+    #     # Guard: side must be 'left' or 'right' (not 'both') here.
+    #     if side not in ('left', 'right'):
+    #         self._log.error(
+    #             f'[GripperCommand._send_single] invalid side {side!r} — '
+    #             f'only "left" or "right" accepted here'
+    #         )
+    #         return False
+
+    #     msg = JointTrajectory()
+
+    #     point = JointTrajectoryPoint()
+
+    #     point.time_from_start = Duration(
+    #         seconds=self.MOTION_TIME
+    #     ).to_msg()
+
+    #     arm_positions = []
+
+    #     # Keep current arm pose fixed.
+    #     # Log a warning for any joint whose state has not yet been received.
+    #     for joint in self.ARM_JOINTS[side]:
+
+    #         pos = self._joint_positions.get(joint)
+
+    #         if pos is None:
+    #             self._log.warn(
+    #                 f'[GripperCommand._send_single] joint state for {joint!r} '
+    #                 f'not yet received — defaulting to 0.0'
+    #             )
+    #             pos = 0.0
+
+    #         arm_positions.append(float(pos))
+
+    #     msg.joint_names = (
+    #         self.ARM_JOINTS[side]
+    #         + [self.GRIPPER_JOINTS[side]]
+    #     )
+
+    #     point.positions = arm_positions + [position]
+
+    #     msg.points = [point]
+
+    #     self._pubs[side].publish(msg)
+    #     return True
     def _send_single(self, side, position):
         """
         Publish a JointTrajectory to one side's controller.
@@ -158,25 +209,8 @@ class GripperCommand:
 
         # Keep current arm pose fixed.
         # Log a warning for any joint whose state has not yet been received.
-        for joint in self.ARM_JOINTS[side]:
-
-            pos = self._joint_positions.get(joint)
-
-            if pos is None:
-                self._log.warn(
-                    f'[GripperCommand._send_single] joint state for {joint!r} '
-                    f'not yet received — defaulting to 0.0'
-                )
-                pos = 0.0
-
-            arm_positions.append(float(pos))
-
-        msg.joint_names = (
-            self.ARM_JOINTS[side]
-            + [self.GRIPPER_JOINTS[side]]
-        )
-
-        point.positions = arm_positions + [position]
+        msg.joint_names = [self.GRIPPER_JOINTS[side]]
+        point.positions = [position]
 
         msg.points = [point]
 

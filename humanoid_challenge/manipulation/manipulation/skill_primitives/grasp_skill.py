@@ -68,7 +68,7 @@ class GraspSkill:
                       Gripper is re-opened automatically on FAILURE.
         """
         side = side.lower()
-
+        self._log.info(f'[GraspSkill] [{side}] starting grasp — object={object_name!r} stable_duration={stable_duration}s')
         if object_name is None:
             object_name = DEFAULT_OBJECT_NAME
 

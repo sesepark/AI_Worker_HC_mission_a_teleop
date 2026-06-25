@@ -100,7 +100,8 @@ class PickSkill:
         hover.position.z  = grasp_pose.position.z + approach_height
         hover.orientation = grasp_pose.orientation
 
-        executed = self._gripper.open_to(side, 0.5)
+        executed = self._gripper.close(side)
+        # executed = self._gripper.open_to(side, 0.5)
         self._gripper.wait_until_executed()
         self._gripper.wait_motion()
 

@@ -159,6 +159,11 @@ class PlanningFilter:
             self.last_failure_reason = self._cfg['result_on_exhaustion']
             self._log_warn('[PlanningFilter] target IK failed')
             return None
+        # Brief pause so the IK service's response pipeline (pymoveit2 future +
+        # DDS ack) fully clears before the next compute_ik_async call.
+        # Back-to-back async IK requests on the same service client can cause the
+        # second future to stall indefinitely on some rmw implementations.
+        time.sleep(0.3)
         if not self._moveit.check_reachable(pre_pose, arm=arm):
             self._reject(arm, 'prepose_ik_failed')
             self.last_failure_reason = self._cfg['result_on_exhaustion']

@@ -4,8 +4,8 @@ from geometry_msgs.msg import Pose
 
 X_FAR_THRESHOLD  = 0.40    # m — 3rd row boundary
 Y_WALL_THRESHOLD = -0.30   # m — right-wall side boundary
-GRASP_Y_OFFSET   = 0.045   # applied as -Y (left side) or +Y (right-wall side)
-GRASP_X_OFFSET   = -0.045  # applied in X for far row
+GRASP_Y_OFFSET   = 0   #0.043 0.045 applied as -Y (left side) or +Y (right-wall side)
+GRASP_X_OFFSET   = 0 #-0.043 -0.045 applied in X for far row
 GRASP_Z          = 0.83    # fixed grasp height (m)
 
 _QUAT_STANDARD = (0.0, 0.0, 0.0,    1.0)     # standard top-down (tested on real robot)
