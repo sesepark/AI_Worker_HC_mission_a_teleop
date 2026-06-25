@@ -78,8 +78,6 @@ class GraspSkill:
         )
 
         self._gripper.close(side)
-        self._gripper.wait_until_executed()  # wait for command to be dispatched
-        self._gripper.wait_motion()          # wait for physical gripper to close
 
         success = self._assessment.assess_stable(
             side,

@@ -125,6 +125,8 @@ class GripperInterface:
             side,
             self.OPEN,
         )
+        self.wait_until_executed()
+        self.wait_motion()
 
     def open_to(self, side, amount: float) -> bool:
         """Open gripper to a specific amount (0.0 = fully open, 1.0 = fully closed).
@@ -138,7 +140,9 @@ class GripperInterface:
         """
         side = side.lower()
         amount = max(self.OPEN, min(self.CLOSE, amount))
-        return self.control(side, amount)
+        self.control(side, amount)
+        self.wait_until_executed()
+        self.wait_motion()
         
     def close(
         self,
@@ -155,6 +159,8 @@ class GripperInterface:
             side,
             self.CLOSE,
         )
+        self.wait_until_executed()
+        self.wait_motion()
 
     def wait_motion(self):
         """Block until the physically commanded motion completes."""

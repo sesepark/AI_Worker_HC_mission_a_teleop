@@ -65,15 +65,11 @@ def main():
         elif key == 'o':
             log.info(f'[test_gripper] open ({side})')
             gripper.open(side)
-            gripper.wait_until_executed()
-            gripper.wait_motion()
             pos = gripper._command.get_position('left' if side == 'both' else side)
             log.info(f'[test_gripper] position: {pos}')
         elif key == 'c':
             log.info(f'[test_gripper] close ({side})')
             gripper.close(side)
-            gripper.wait_until_executed()
-            gripper.wait_motion()
             pos = gripper._command.get_position('left' if side == 'both' else side)
             log.info(f'[test_gripper] position: {pos}')
         elif key == 't':
@@ -91,8 +87,6 @@ def main():
                 amount = float(raw)
                 log.info(f'[test_gripper] open_to {amount} ({side})')
                 gripper.open_to(side, amount)
-                gripper.wait_until_executed()
-                gripper.wait_motion()
                 pos = gripper._command.get_position('left' if side == 'both' else side)
                 log.info(f'[test_gripper] position: {pos}')
             except ValueError:

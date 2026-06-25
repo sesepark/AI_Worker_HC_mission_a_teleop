@@ -109,8 +109,6 @@ class PlaceSkill:
             return PlaceResult.FAILURE
 
         self._gripper.open(side)
-        self._gripper.wait_until_executed()
-        self._gripper.wait_motion()
 
         retract = self._moveit.move_cartesian(hover, arm=arm)
         if retract != MoveResult.SUCCEEDED:
@@ -148,8 +146,6 @@ class PlaceSkill:
         self._moveit.move_lift(lift_home - approach_height)
 
         self._gripper.open(side)
-        self._gripper.wait_until_executed()
-        self._gripper.wait_motion()
 
         self._moveit.move_lift(lift_home)
         self._log.info(f'[PlaceSkill] [{side}] place SUCCEEDED (lift)')
@@ -185,8 +181,6 @@ class PlaceSkill:
         self._moveit.move_lift(lift_home - release_height)
 
         self._gripper.open(side)
-        self._gripper.wait_until_executed()
-        self._gripper.wait_motion()
 
         self._moveit.move_lift(lift_home)
         self._log.info(f'[PlaceSkill] [{side}] place SUCCEEDED (wheel)')
