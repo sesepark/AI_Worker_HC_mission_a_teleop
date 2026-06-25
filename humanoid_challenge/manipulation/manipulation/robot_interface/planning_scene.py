@@ -24,9 +24,30 @@ FRAME_ID = "base_link"
 _ALLOW_COLLISIONS_TIMEOUT_SEC = 2.0
 _SPIN_TIMEOUT_SEC              = 0.05
 
-PACKAGE_SHARE_DIR = get_package_share_directory("manipulation")
-_DESK_CONFIG_PATH = os.path.join(PACKAGE_SHARE_DIR, "config", "desk.yaml")
-_ZONE_A_CONFIG_PATH = os.path.join(PACKAGE_SHARE_DIR, "config", "zone_a.yaml")
+def _resolve_config_path(filename: str) -> str:
+    """Config 파일 경로 해석 (R6 하이브리드 폴백).
+
+    이 모듈은 import 시점에 zone_a.yaml 을 읽으므로 경로가 깨지면 import 자체가
+    실패한다. 설치된 ament share 디렉터리를 우선 시도하고(배포), 실패(미설치 개발
+    트리)하면 소스 트리의 ``<pkg>/manipulation/config/`` 상대경로로 폴백한다.
+    """
+    candidates = []
+    try:
+        candidates.append(
+            os.path.join(get_package_share_directory("manipulation"), "config", filename))
+    except Exception:
+        # 미설치 개발 트리 등에서 PackageNotFoundError → 상대경로 폴백만 사용.
+        pass
+    candidates.append(os.path.join(os.path.dirname(__file__), "..", "config", filename))
+    for path in candidates:
+        if os.path.exists(path):
+            return os.path.normpath(path)
+    # 어느 후보도 없으면 마지막 후보를 반환(에러 메시지에 경로가 남도록).
+    return os.path.normpath(candidates[-1])
+
+
+_DESK_CONFIG_PATH = _resolve_config_path("desk.yaml")
+_ZONE_A_CONFIG_PATH = _resolve_config_path("zone_a.yaml")
 
 
 def _load_zone_a_config() -> dict:
