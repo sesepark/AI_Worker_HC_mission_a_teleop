@@ -205,8 +205,6 @@ class GripperCommand:
             seconds=self.MOTION_TIME
         ).to_msg()
 
-        arm_positions = []
-
         # Keep current arm pose fixed.
         # Log a warning for any joint whose state has not yet been received.
         msg.joint_names = [self.GRIPPER_JOINTS[side]]
