@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 충족 완료된 요청 스펙입니다. 확정 계약은 [../INTERFACES.md](../INTERFACES.md), perception I/O 정본은 [../PERCEPTION_INTERFACE.md](../PERCEPTION_INTERFACE.md). 원 요청 기록으로 보존.
+
 # [요청서] Perception — 미션 A (SDR v2.3)
 
 > System(FSM)팀 → Perception팀. **기존 검증 파이프라인은 불변**이며, 본 요청의 신규 항목은

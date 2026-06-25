@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 이 운용 매뉴얼은 불완전(FSM 흐름에 A3_MOVE_TO_TRAY/RETURN/VERIFY/RECOVERY/MANUAL_WAIT 누락)하여 완전판 [../MISSION_A_STATE_MACHINE_MANUAL.md](../MISSION_A_STATE_MACHINE_MANUAL.md)로 **대체**되었습니다. 운용 STEP은 [../RUNBOOK.md](../RUNBOOK.md), 계약 §5는 [../INTERFACES.md](../INTERFACES.md)에 흡수됨. (원 파일명에 공백 결함이 있어 이동 시 교정.) 참고용으로 보존.
+
 # Mission A 통합 시스템 — 구성 및 실행 매뉴얼
 
 Mission A 통합 시스템(perception → manipulation → mission FSM)의 운용 구조, 인터페이스 계약,

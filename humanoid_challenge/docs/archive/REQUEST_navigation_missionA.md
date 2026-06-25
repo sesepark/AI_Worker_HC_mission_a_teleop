@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 충족 완료된 요청 스펙입니다. 확정 계약은 [../INTERFACES.md](../INTERFACES.md), 실 구현 결과는 [../MISSION_A_NAV_RESULT.md](../MISSION_A_NAV_RESULT.md). 원 요청 기록으로 보존.
+
 # [요청서] Navigation (모바일 베이스) — 미션 A (SDR v2.3)
 
 > System(FSM)팀 → Navigation팀. 본 문서는 **인터페이스 계약**이다. System 은 mock 으로

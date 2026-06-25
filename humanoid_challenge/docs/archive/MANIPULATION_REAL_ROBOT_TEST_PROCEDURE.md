@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 이 파일은 [../REAL_ROBOT_TEST_PROCEDURE.md](../REAL_ROBOT_TEST_PROCEDURE.md)와 **바이트 동일**한 중복본입니다. 정본은 그쪽을 유지. 참고용으로 보존.
+
 # 실물 로봇 테스트 프로시져 (Mission A)
 
 ## 사전 확인
