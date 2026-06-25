@@ -12,7 +12,11 @@ Phase 1 `integration_demo.launch.py`(mock 위주)의 Phase 2 대응본. 한 laun
   ai_worker$  ros2 launch manipulation mission_a_manip.launch.py        # 실 manip 서버(T1)
   (공통 env: ROS_DOMAIN_ID=30, ROS_LOCALHOST_ONLY=0, ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET — CONTEXT §7.1)
 
-nav 은 전 구간 stub(nav_mode=stub). move_base_lateral 실연동은 범위 밖(TODO).
+nav: `nav_mode`(기본 stub) 인자로 단계화. **실 MoveBaseLateral 연동(nav_mode:=service)** 시
+실 nav 서버는 /cmd_vel·/odom 가 있는 **로봇 PC에서 별도 기동**(cross-PC service):
+  robot PC$  ros2 launch mission move_base_lateral.launch.py
+  main  PC$  ros2 launch mission mission_a_real.launch.py nav_mode:=service
+FSM 은 A3_MOVE_TO_TRAY(좌 675mm)/A3_RETURN_TO_BOX(우 675mm)에서 MoveBaseLateral.srv 호출.
 mock 전용 회귀 검증은 기존 `mission_a.launch.py use_mocks:=true` / `integration_demo.launch.py` 사용.
 """
 import os
@@ -36,6 +40,10 @@ def generate_launch_description() -> LaunchDescription:
                               description='C3 게이트(실 place_pose_valid 준비 후 true)'),
         DeclareLaunchArgument('mock_monitor_ocr', default_value='true',
                               description='실 perception: 모니터 OCR mock(카메라 없이 task_list)'),
+        DeclareLaunchArgument('nav_mode', default_value='stub',
+                              description='{stub|service} — service 시 실 move_base_lateral(로봇 PC 별도 기동)'),
+        DeclareLaunchArgument('nav_service_wait_sec', default_value='10.0',
+                              description='cross-PC nav 서비스 콜드 디스커버리 wait_for_service 타임아웃[s]'),
     ]
 
     perception = IncludeLaunchDescription(
@@ -46,7 +54,8 @@ def generate_launch_description() -> LaunchDescription:
         PythonLaunchDescriptionSource(mission_launch),
         launch_arguments={
             'use_mocks': 'false',           # 실 manip(ai_worker)·실 perception 사용 → mock 미기동
-            'nav_mode': 'stub',
+            'nav_mode': lc('nav_mode'),
+            'nav_service_wait_sec': lc('nav_service_wait_sec'),
             'use_place_pose_check': lc('use_place_pose_check'),
         }.items(),
     )
