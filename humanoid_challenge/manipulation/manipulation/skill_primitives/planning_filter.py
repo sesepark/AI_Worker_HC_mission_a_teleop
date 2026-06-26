@@ -35,11 +35,11 @@ _DEFAULT_CFG = {
     'enabled': True,
     'result_on_exhaustion': NO_VALID_MOTION_CANDIDATE,
     'plan_timeout_s': 5.0,   # per-planner timeout
-    'total_budget_s': 12.0,  # plan_timeout_s * 2 + buffer
+    'total_budget_s': 25.0,  # plan_timeout_s * 4 + buffer
     'workspace_bounds': {
-        'x': [0.03, 0.5],
-        'y': [-0.58, 0.55],
-        'z': [0.50, 1.30],
+        'x': [0.03, 0.7],
+        'y': [-0.6, 0.6],
+        'z': [0.50, 1.4],
     },
     'path_quality': {
         'max_joint_path_length': 5.0,
@@ -48,6 +48,8 @@ _DEFAULT_CFG = {
     'global_planners': [
         {'pipeline': 'pilz_industrial_motion_planner', 'planner': 'PTP'},
         {'pipeline': 'stomp', 'planner': 'STOMP'},
+        {'pipeline': 'ompl', 'planner': 'RRTstar'},
+        {'pipeline': 'ompl', 'planner': 'LBKPIECE'},
     ],
 }
 
