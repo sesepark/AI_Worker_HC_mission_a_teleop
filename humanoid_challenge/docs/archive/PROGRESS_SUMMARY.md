@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 시점 스냅샷(2026-05-31, 구 `feature/mission-a` 브랜치)입니다. §1 "문서 가이드"는 현행 [../README.md](../README.md) INDEX로 대체됨. 당시 진행 상황 기록으로 보존.
+
 # 진행 상황 요약 (System 팀 — Perception 통합 / Mission A / VR)
 
 > **최종 업데이트**: 2026-05-31 · **브랜치**: `feature/mission-a`

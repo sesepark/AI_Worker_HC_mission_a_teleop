@@ -1,3 +1,5 @@
+> ⚠️ **아카이브됨 (2026-06-25 재구조화)** — 충족 완료된 요청 스펙입니다. 확정 계약은 [../INTERFACES.md](../INTERFACES.md) 및 [../MISSION_A_PHASE2_RESULT.md](../MISSION_A_PHASE2_RESULT.md) §1. 원 요청 기록으로 보존.
+
 # [요청서] Manipulation — 미션 A (SDR v2.3)
 
 > System(FSM)팀 → Manipulation팀. 본 문서는 **인터페이스 계약**이다. System 은 mock 으로
