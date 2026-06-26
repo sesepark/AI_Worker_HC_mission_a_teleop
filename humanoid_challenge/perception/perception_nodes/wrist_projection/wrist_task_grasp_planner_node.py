@@ -136,6 +136,10 @@ class WristTaskGraspPlannerNode(Node):
         self.declare_parameter('temporal_min_observations', 2)
         self.declare_parameter('temporal_position_gate_m', 0.06)
         self.declare_parameter('temporal_max_history', 50)
+        # 선택 락온(히스테리시스): 한 번 고른 타깃을 유지해 프레임마다 후보가 뒤바뀌는(flip) 것 방지.
+        #   FOV 에 유사 점수 부품이 여러 개일 때 select 가 진동 → pick 이 안정 좌표를 못 잡는 문제 해결.
+        self.declare_parameter('select_lock_enable', True)
+        self.declare_parameter('select_switch_margin', 0.12)
         self.declare_parameter('republish_last_pose_hz', 2.0)
         self.declare_parameter('hold_last_pose_sec', 2.0)
 
@@ -206,6 +210,8 @@ class WristTaskGraspPlannerNode(Node):
             1, int(gp('temporal_min_observations').value))
         self.temporal_position_gate_m = float(gp('temporal_position_gate_m').value)
         self.temporal_max_history = max(1, int(gp('temporal_max_history').value))
+        self.select_lock_enable = bool(gp('select_lock_enable').value)
+        self.select_switch_margin = float(gp('select_switch_margin').value)
         self.republish_last_pose_hz = float(gp('republish_last_pose_hz').value)
         self.hold_last_pose_sec = float(gp('hold_last_pose_sec').value)
 
@@ -223,6 +229,9 @@ class WristTaskGraspPlannerNode(Node):
         self.latest_screen_detected = True
         self.candidate_history: Deque[Tuple[float, Candidate]] = deque(
             maxlen=self.temporal_max_history)
+        # 선택 락온 상태(현재 고정된 타깃의 class + 위치). None 이면 미고정.
+        self._locked_class: Optional[str] = None
+        self._locked_center: Optional[np.ndarray] = None
         self.last_pose: Optional[PoseStamped] = None
         self.last_target_detection: Optional[String] = None
         self.last_pose_time = None
@@ -311,6 +320,8 @@ class WristTaskGraspPlannerNode(Node):
         if self.require_screen_detected and not self.latest_screen_detected:
             self.current_tasks = {}
             self.candidate_history.clear()
+            self._locked_class = None
+            self._locked_center = None
             self.last_pose = None
             self.last_target_detection = None
             self.last_pose_time = None
@@ -338,6 +349,8 @@ class WristTaskGraspPlannerNode(Node):
 
         if tasks != previous_tasks:
             self.candidate_history.clear()
+            self._locked_class = None
+            self._locked_center = None
             self.last_pose = None
             self.last_target_detection = None
             self.last_pose_time = None
@@ -595,39 +608,69 @@ class WristTaskGraspPlannerNode(Node):
             )
             matched['center'] = np.average(points, axis=0, weights=weights)
 
-        best_group = None
-        best_group_key = (-1.0, -1, -1.0)
-
+        # 관측 충분(min_observations)한 클러스터별 대표(스무딩) 후보 산출.
+        #   group_key=(score_sum, frame_count, max_score) — 기존 정렬 기준 보존.
+        eligible: list = []  # (group_key, smoothed_candidate, cluster_center)
         for cluster in clusters:
             items = cluster['items']
             frame_count = len({stamp_sec for stamp_sec, _ in items})
-
             if frame_count < self.temporal_min_observations:
                 continue
-
             score_sum = sum(c.score for _, c in items)
             max_score = max(c.score for _, c in items)
-            group_key = (score_sum, frame_count, max_score)
+            eligible.append((
+                (score_sum, frame_count, max_score),
+                self._smoothed_candidate(items),
+                np.asarray(cluster['center'], dtype=np.float64),
+            ))
 
-            if group_key > best_group_key:
-                best_group_key = group_key
-                best_group = items
-
-        if best_group is None:
+        if not eligible:
+            # 유효 타깃 없음 → 락 해제(부품이 사라졌거나 관측 부족).
+            self._locked_class = None
+            self._locked_center = None
             return None
 
-        weights = np.asarray([max(1e-3, c.score) for _, c in best_group], dtype=np.float64)
-        points = np.asarray([c.center_color for _, c in best_group], dtype=np.float64)
-        smoothed_center = np.average(points, axis=0, weights=weights)
+        eligible.sort(key=lambda e: e[0], reverse=True)
+        chosen, chosen_center = eligible[0][1], eligible[0][2]
 
-        representative = max((c for _, c in best_group), key=lambda c: c.score)
+        # 락온(히스테리시스): 직전에 고른 타깃이 아직 유효하면(같은 class + 위치 근접),
+        #   경쟁자가 select_switch_margin 이상 앞서지 않는 한 그 타깃을 유지한다.
+        #   → 유사 점수 부품이 여럿일 때 프레임마다 뒤바뀌는 flip 제거(pick 안정화).
+        if self.select_lock_enable and self._locked_center is not None:
+            locked = None
+            for _, cand, center in eligible:
+                if (cand.canonical_class == self._locked_class
+                        and float(np.linalg.norm(center - self._locked_center))
+                        <= self.temporal_position_gate_m):
+                    locked = (cand, center)
+                    break
+            if locked is not None:
+                locked_cand, locked_center = locked
+                top_is_locked = (
+                    chosen.canonical_class == self._locked_class
+                    and float(np.linalg.norm(chosen_center - self._locked_center))
+                    <= self.temporal_position_gate_m)
+                if (not top_is_locked
+                        and chosen.score < locked_cand.score + self.select_switch_margin):
+                    chosen, chosen_center = locked_cand, locked_center
+
+        self._locked_class = chosen.canonical_class
+        self._locked_center = chosen_center.astype(np.float64)
+        return chosen
+
+    def _smoothed_candidate(self, group) -> Candidate:
+        """한 클러스터(group)의 관측들을 점수가중 평균해 대표 Candidate 생성."""
+        weights = np.asarray([max(1e-3, c.score) for _, c in group], dtype=np.float64)
+        points = np.asarray([c.center_color for _, c in group], dtype=np.float64)
+        smoothed_center = np.average(points, axis=0, weights=weights)
+        representative = max((c for _, c in group), key=lambda c: c.score)
         return Candidate(
             det=representative.det,
             canonical_class=representative.canonical_class,
             bbox=representative.bbox,
             center_color=smoothed_center,
-            point_count=sum(c.point_count for _, c in best_group) // len(best_group),
-            score=max(c.score for _, c in best_group),
+            point_count=sum(c.point_count for _, c in group) // len(group),
+            score=max(c.score for _, c in group),
             metrics=representative.metrics,
         )
 
