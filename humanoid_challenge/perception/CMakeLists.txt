@@ -49,6 +49,11 @@ install(PROGRAMS
   RENAME head_pipe_top_centers_node
 )
 install(PROGRAMS
+  perception_nodes/head_pipe/pipe_centers_preset_pub.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pipe_centers_preset_pub
+)
+install(PROGRAMS
   perception_nodes/part_detector/peg_detector_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME peg_detector_node

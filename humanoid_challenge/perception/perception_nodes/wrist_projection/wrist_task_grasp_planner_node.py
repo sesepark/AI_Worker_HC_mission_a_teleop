@@ -24,6 +24,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rcl_interfaces.msg import ParameterDescriptor
 
 import message_filters
 from cv_bridge import CvBridge
@@ -91,6 +92,13 @@ class WristTaskGraspPlannerNode(Node):
         self.declare_parameter('allow_all_without_task', False)
         self.declare_parameter('require_screen_detected', False)
         self.declare_parameter('task_timeout_sec', 10.0)
+        # 고정 픽 순서(class 우선순위). 비우면([]) 기존 점수기반. 검출된 후보 중
+        # 이 순서에서 가장 앞 우선순위 class 하나로 한정(그 안은 점수/락온으로 tie-break).
+        self.declare_parameter(
+            'pick_class_order', [],
+            ParameterDescriptor(
+                dynamic_typing=True,
+                description='고정 픽 순서(class). 비우면([]) 점수기반 선택.'))
         self.declare_parameter(
             'class_alias_json',
             '{'
@@ -174,6 +182,13 @@ class WristTaskGraspPlannerNode(Node):
         self.allow_all_without_task = bool(gp('allow_all_without_task').value)
         self.require_screen_detected = bool(gp('require_screen_detected').value)
         self.task_timeout_sec = float(gp('task_timeout_sec').value)
+        self.pick_class_order = [
+            str(c).strip() for c in (gp('pick_class_order').value or []) if str(c).strip()
+        ]
+        if self.pick_class_order:
+            self.get_logger().info(
+                f'pick_class_order 활성 — 고정 픽 순서 {self.pick_class_order} '
+                '(검출된 가장 앞 우선순위 class만 선택).')
         self.alias_map = self._load_alias_map(str(gp('class_alias_json').value))
 
         self.min_confidence = float(gp('min_confidence').value)
@@ -226,6 +241,8 @@ class WristTaskGraspPlannerNode(Node):
 
         self.current_tasks: Dict[str, int] = {}
         self.task_last_update = None
+        self._pick_order_active_class: Optional[str] = None
+        self._commanded_class: str = ''   # FSM(base_seq)이 지정한 현재 픽 타깃 class
         self.latest_screen_detected = True
         self.candidate_history: Deque[Tuple[float, Candidate]] = deque(
             maxlen=self.temporal_max_history)
@@ -277,6 +294,9 @@ class WristTaskGraspPlannerNode(Node):
         )
         self.sub_det = self.create_subscription(
             PartDetectionArray, self.detections_topic, self.detections_cb, 10)
+        # base_seq: FSM 이 지정한 "지금 집을 class" — 설정되면 그 class 만 픽(pick_class_order 무시).
+        self.sub_target_class = self.create_subscription(
+            String, '/perception/wrist/target_class', self._target_class_cb, 10)
 
         self.get_logger().info(
             'WristTaskGraspPlannerNode ready.\n'
@@ -511,6 +531,10 @@ class WristTaskGraspPlannerNode(Node):
             )
             return
 
+        candidates = self._apply_pick_order(candidates)
+        if not candidates:
+            return  # strict: pick_class_order 밖만 검출 → 발행 안함
+
         candidates.sort(key=lambda c: c.score, reverse=True)
         raw_best = candidates[0]
 
@@ -553,6 +577,42 @@ class WristTaskGraspPlannerNode(Node):
             f'conf={float(best.det.confidence):.2f} pts={best.point_count} '
             f'-> {self.base_frame} ({p.x:.3f}, {p.y:.3f}, {p.z:.3f}) m'
         )
+
+    def _target_class_cb(self, msg: String) -> None:
+        cls = (msg.data or '').strip()
+        if cls != self._commanded_class:
+            self.get_logger().info(
+                f'[target_class] FSM 지정 픽 타깃 -> {cls!r} (빈 값이면 pick_class_order 사용)')
+            self._commanded_class = cls
+
+    def _apply_pick_order(self, candidates: List[Candidate]) -> List[Candidate]:
+        """선택 한정 규칙:
+        1) FSM 이 _commanded_class 를 지정(base_seq)하면 **그 class 만** (없으면 미발행).
+        2) 아니면 pick_class_order(설정 시) 의 가장 앞 우선순위 class 하나로 한정.
+        3) 둘 다 없으면 전체(점수기반). 목록/지정 밖은 절대 pick 안함(빈 리스트)."""
+        if self._commanded_class:
+            present = {c.canonical_class for c in candidates}
+            if self._commanded_class in present:
+                return [c for c in candidates if c.canonical_class == self._commanded_class]
+            self.get_logger().warn(
+                f'[target_class] 지정 class {self._commanded_class!r} 미검출 '
+                f'(검출 {sorted(present)}); 대기.', throttle_duration_sec=5.0)
+            return []
+        if not self.pick_class_order:
+            return candidates
+        present = {c.canonical_class for c in candidates}
+        for cls in self.pick_class_order:
+            if cls in present:
+                if cls != self._pick_order_active_class:
+                    self.get_logger().info(
+                        f'[pick_order] 활성 class -> {cls} (순서 {self.pick_class_order})')
+                    self._pick_order_active_class = cls
+                return [c for c in candidates if c.canonical_class == cls]
+        self.get_logger().warn(
+            f'[pick_order] 순서 목록 {self.pick_class_order} 밖만 검출됨 '
+            f'(검출 {sorted(present)}); 미선택(목록 밖은 pick 안함).',
+            throttle_duration_sec=5.0)
+        return []
 
     def _select_stable_candidate(
         self,

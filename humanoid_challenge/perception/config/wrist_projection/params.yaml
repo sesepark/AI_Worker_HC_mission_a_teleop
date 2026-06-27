@@ -39,6 +39,11 @@ wrist_task_grasp_planner_node:
     require_screen_detected: false
     task_timeout_sec: 10.0
 
+    # 고정 픽 순서(class 우선순위). 비우면 [] → 기존 점수기반 선택.
+    # 대회 배치(왼→오): flange_nut/gear_ring/spacer_ring/hex_nut/dome_nut.
+    # 임시 1-2-3-4 = flange→gear_ring→spacer_ring→hex_nut (dome 제외).
+    pick_class_order: ["flange_nut", "gear_ring", "spacer_ring", "hex_nut"]
+
     class_alias_json: '{"플랜지 너트":"flange_nut","플랜지너트":"flange_nut","기어 링":"gear_ring","기어링":"gear_ring","스페이서 링":"spacer_ring","스페이서링":"spacer_ring","육각 너트":"hex_nut","육각너트":"hex_nut","dom nut":"dome_nut","dom_nut":"dome_nut","dome nut":"dome_nut","dome_nut":"dome_nut","돔 너트":"dome_nut","돔너트":"dome_nut"}'
 
     # Candidate extraction.
