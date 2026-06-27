@@ -19,12 +19,12 @@ PIPELINE = 'ompl'
 PLANNER  = 'RRTConnect'
 
 # 목표 위치 (base_link 기준, 단위: m)
-TARGET_X =  0.320
-TARGET_Y = -0.250
-TARGET_Z =  1.350
+TARGET_X =  0.475
+TARGET_Y = -0.203
+TARGET_Z =  0.880
 
-# top-down 수직 자세 quaternion (pitch=90°, roll=0°, yaw=0°)
-TARGET_QX, TARGET_QY, TARGET_QZ, TARGET_QW = 0.0, 0.0, 0.0, 1.0
+# yaw180 quaternion (Z축 180° 회전)
+TARGET_QX, TARGET_QY, TARGET_QZ, TARGET_QW = 0.0, 0.0, 1.0, 0.0
 # ─────────────────────────────────────────────────────────────────
 
 
