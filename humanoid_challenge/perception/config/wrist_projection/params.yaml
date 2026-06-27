@@ -40,9 +40,12 @@ wrist_task_grasp_planner_node:
     task_timeout_sec: 10.0
 
     # 고정 픽 순서(class 우선순위). 비우면 [] → 기존 점수기반 선택.
+    # ※ 통합 브랜치 기본값은 [](=미션 A 점수기반). pick_class_order는 미션 C 전용 기능이며,
+    #    미션 C는 FSM(mission_c)이 /perception/wrist/target_class 로 class를 직접 지정해 순서를
+    #    주도한다(노드는 commanded class가 있으면 pick_class_order를 무시). 고정순서 fallback이
+    #    필요하면 미션 C launch에서만 이 파라미터를 오버라이드할 것.
     # 대회 배치(왼→오): flange_nut/gear_ring/spacer_ring/hex_nut/dome_nut.
-    # 임시 1-2-3-4 = flange→gear_ring→spacer_ring→hex_nut (dome 제외).
-    pick_class_order: ["flange_nut", "gear_ring", "spacer_ring", "hex_nut"]
+    pick_class_order: []
 
     class_alias_json: '{"플랜지 너트":"flange_nut","플랜지너트":"flange_nut","기어 링":"gear_ring","기어링":"gear_ring","스페이서 링":"spacer_ring","스페이서링":"spacer_ring","육각 너트":"hex_nut","육각너트":"hex_nut","dom nut":"dome_nut","dom_nut":"dome_nut","dome nut":"dome_nut","dome_nut":"dome_nut","돔 너트":"dome_nut","돔너트":"dome_nut"}'
 
