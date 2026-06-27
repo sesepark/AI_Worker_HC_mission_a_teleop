@@ -55,10 +55,13 @@ _QUAT_YAW180   = (0.0, 0.0, 1.0,    0.0)      # Z축 180° 회전 (탐색 중)
 def build_mission_a_grasp_pose(
     center_pose: Pose,
     neighbors: Sequence[Pose] | None = None,
+    robot_y_offset: float = 0.0,
 ) -> Pose:
     """Return final grasp pose with orientation, offset, and z applied.
 
-    neighbors: 주변 너트 중앙좌표 리스트 (없으면 위치 기반 로직만 적용).
+    neighbors:      주변 너트 중앙좌표 리스트 (없으면 위치 기반 로직만 적용).
+    robot_y_offset: 로봇 좌우 이동량 (m). 이동 후 호출 시 실제 이동값을 전달.
+                    base_link 기준 벽 경계를 동적으로 보정한다.
     """
     pose = _copy_pose(center_pose)
     pose.position.z = GRASP_Z
@@ -66,7 +69,15 @@ def build_mission_a_grasp_pose(
     cx = center_pose.position.x
     cy = center_pose.position.y
 
-    _log.info(f'[grasp_adapter] target=({cx:.3f},{cy:.3f}) neighbors={len(neighbors) if neighbors else 0}개')
+    y_right_wall = Y_RIGHT_WALL + robot_y_offset
+    y_left_wall  = Y_LEFT_WALL  + robot_y_offset
+
+    _log.info(
+        f'[grasp_adapter] target=({cx:.3f},{cy:.3f}) '
+        f'robot_y_offset={robot_y_offset:.3f} '
+        f'walls=({y_right_wall:.3f},{y_left_wall:.3f}) '
+        f'neighbors={len(neighbors) if neighbors else 0}개'
+    )
 
     # ── 1. 근접 너트 분석 ──────────────────────────────────────────────
     left_close  = False
@@ -90,7 +101,7 @@ def build_mission_a_grasp_pose(
             pose.position.x += GRASP_YAW_X_OFFSET
             pose.position.y += GRASP_YAW_Y_OFFSET
         elif left_close:
-            if cy < Y_RIGHT_WALL:
+            if cy < y_right_wall:
                 case = '좌 근접 + 우벽 → yaw90 [제약]'
                 qx, qy, qz, qw = _QUAT_YAW90
                 pose.position.x += GRASP_YAW_X_OFFSET
@@ -101,7 +112,7 @@ def build_mission_a_grasp_pose(
                 pose.position.x += GRASP_STD_X_OFFSET
                 pose.position.y -= GRASP_STD_Y_OFFSET
         else:
-            if cy >= Y_LEFT_WALL:
+            if cy >= y_left_wall:
                 case = '우 근접 + 좌벽 → yaw90 [제약: 카메라 충돌 위험]'
                 qx, qy, qz, qw = _QUAT_YAW90
                 pose.position.x += GRASP_YAW_X_OFFSET
@@ -129,7 +140,7 @@ def build_mission_a_grasp_pose(
     else:
         qx, qy, qz, qw = _QUAT_STANDARD
         pose.position.x += GRASP_STD_X_OFFSET
-        if cy >= Y_RIGHT_WALL:
+        if cy >= y_right_wall:
             case = f'standard 일반(y={cy:.3f}) → y-=STD_Y'
             pose.position.y -= GRASP_STD_Y_OFFSET
         else:
