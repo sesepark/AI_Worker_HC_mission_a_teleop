@@ -1,28 +1,3 @@
-#!/usr/bin/env python3
-"""
-moveit_dual.py
-
-Dual-arm helper for FFW arms when the goal is symmetric motion.
-
-Key idea
---------
-Do not send two simultaneous goals to MoveIt's single /move_action server.
-Instead:
-  1) filter fixed, file-defined waypoint poses with the same policy as
-     task_pose_selector.py; no GPD data or candidate selection is used (workspace, orientation envelope, pre-grasp,
-     reachable checks, planner cascade),
-  2) generate the fixed LEFT-arm waypoint path with pymoveit2.MoveIt2.plan_async(),
-     matching moveit_client.py's pose-planning flow,
-  3) mirror it for the other arm when symmetric motion is required,
-  4) send the final JointTrajectory goals directly to
-     /arm_l_controller/follow_joint_trajectory and
-     /arm_r_controller/follow_joint_trajectory together.
-
-This file intentionally supports a mirrored joint trajectory workflow because a
-box-carrying task requires the two hands to move as a coupled pair, not as two
-independent MoveIt pose plans.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -30,6 +5,7 @@ import math
 import os
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -116,6 +92,8 @@ ARM_CONTROLLER_ACTION = {
     Arm.LEFT: "/arm_l_controller/follow_joint_trajectory",
     Arm.RIGHT: "/arm_r_controller/follow_joint_trajectory",
 }
+LIFT_CONTROLLER_ACTION = "/lift_controller/follow_joint_trajectory"
+LIFT_JOINT_NAME = "lift_joint"
 ARM_GROUP = {Arm.LEFT: "arm_l", Arm.RIGHT: "arm_r"}
 ARM_EEF = {Arm.LEFT: "end_effector_l_link", Arm.RIGHT: "end_effector_r_link"}
 BASE_LINK = "base_link"
@@ -124,6 +102,28 @@ BASE_LINK = "base_link"
 # Mirroring is applied to DELTAS around this pair, not by raw sign flipping.
 LEFT_SYMMETRY_REF = [-0.587, 0.046, 0.090, 0.912, -0.095, -0.315, 0.048]
 RIGHT_SYMMETRY_REF = [-0.594, -0.021, -0.040, 0.914, 0.056, -0.310, -0.022]
+
+# Full-extended/attention target used by test_dual_home.
+# Keep this separate from the symmetry reference above; the symmetry reference is
+# for calibrated mirroring, while this is an actual commanded posture.
+LEFT_ATTENTION_TARGET = [
+    0.0,  # arm_l_joint1
+    0.0,  # arm_l_joint2
+    0.0,  # arm_l_joint3
+    0.0,  # arm_l_joint4
+    0.0,  # arm_l_joint5
+    0.0,  # arm_l_joint6
+    0.0,  # arm_l_joint7
+]
+RIGHT_ATTENTION_TARGET = [
+    0.0,  # arm_r_joint1
+    0.0,  # arm_r_joint2
+    0.0,  # arm_r_joint3
+    0.0,  # arm_r_joint4
+    0.0,  # arm_r_joint5
+    0.0,  # arm_r_joint6
+    0.0,  # arm_r_joint7
+]
 
 # From observed SG2 behavior: joint1,4,6 are same-direction; joint2,3,5,7 mirror sign.
 MIRROR_SIGNS_L_TO_R = [1.0, -1.0, -1.0, 1.0, -1.0, 1.0, -1.0]
@@ -190,6 +190,15 @@ TASK_PLANNER_SPECS = [
 # ---------------------------------------------------------------------------
 
 
+def wait_future(future, timeout_sec: float):
+    deadline = time.time() + float(timeout_sec)
+    while not future.done():
+        if time.time() > deadline:
+            raise TimeoutError("future timeout")
+        time.sleep(0.01)
+    return future.result()
+
+
 def duration_from_seconds(seconds: float) -> Duration:
     sec = int(math.floor(seconds))
     nanosec = int(round((seconds - sec) * 1e9))
@@ -197,6 +206,83 @@ def duration_from_seconds(seconds: float) -> Duration:
         sec += 1
         nanosec -= 1_000_000_000
     return Duration(sec=sec, nanosec=nanosec)
+
+
+def normalize_quaternion(quat: Iterable[float]) -> tuple[float, float, float, float]:
+    values = tuple(float(v) for v in quat)
+    if len(values) != 4:
+        raise ValueError("quaternion must have exactly 4 values: qx qy qz qw")
+    qx, qy, qz, qw = values
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if norm < 1.0e-9:
+        raise ValueError("quaternion norm is zero")
+    return (qx / norm, qy / norm, qz / norm, qw / norm)
+
+
+def quaternion_from_rpy_deg(
+    roll_deg: float,
+    pitch_deg: float,
+    yaw_deg: float,
+) -> tuple[float, float, float, float]:
+    """Return qx, qy, qz, qw from roll/pitch/yaw in degrees."""
+    roll = math.radians(float(roll_deg))
+    pitch = math.radians(float(pitch_deg))
+    yaw = math.radians(float(yaw_deg))
+
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    return normalize_quaternion((qx, qy, qz, qw))
+
+
+def make_pose_from_quat(x: float, y: float, z: float, quat: Iterable[float]) -> Pose:
+    qx, qy, qz, qw = normalize_quaternion(quat)
+    pose = Pose()
+    pose.position.x = float(x)
+    pose.position.y = float(y)
+    pose.position.z = float(z)
+    pose.orientation.x = qx
+    pose.orientation.y = qy
+    pose.orientation.z = qz
+    pose.orientation.w = qw
+    return pose
+
+
+def waypoint_to_pose(waypoint: dict) -> tuple[str, Pose]:
+    name = str(waypoint.get("name", "unnamed"))
+    if "position" not in waypoint:
+        raise ValueError(f"{name} is missing position: [x, y, z]")
+
+    position = tuple(float(v) for v in waypoint["position"])
+    if len(position) != 3:
+        raise ValueError(f"{name} position must have exactly 3 values: x y z")
+
+    if "quat" in waypoint and waypoint["quat"] is not None:
+        quat = normalize_quaternion(waypoint["quat"])
+    elif "rpy_deg" in waypoint and waypoint["rpy_deg"] is not None:
+        rpy = tuple(float(v) for v in waypoint["rpy_deg"])
+        if len(rpy) != 3:
+            raise ValueError(f"{name} rpy_deg must have exactly 3 values")
+        quat = quaternion_from_rpy_deg(rpy[0], rpy[1], rpy[2])
+    else:
+        raise ValueError(f"{name} must provide either quat or rpy_deg")
+
+    pose = make_pose_from_quat(position[0], position[1], position[2], quat)
+    return name, pose
+
+
+def resolve_waypoint_poses(waypoints: list[dict]) -> list[tuple[str, Pose]]:
+    if len(waypoints) < 2:
+        raise ValueError("waypoints must contain at least two entries")
+    return [waypoint_to_pose(wp) for wp in waypoints]
 
 
 def copy_point_time(point: JointTrajectoryPoint) -> Duration:
@@ -213,6 +299,12 @@ def copy_pose(pose: Pose) -> Pose:
     copied.orientation.z = float(pose.orientation.z)
     copied.orientation.w = float(pose.orientation.w)
     return copied
+
+
+def copy_pose_with_z_offset(pose: Pose, dz: float) -> Pose:
+    out = copy_pose(pose)
+    out.position.z = float(pose.position.z) + float(dz)
+    return out
 
 
 def pose_to_str(pose: Pose) -> str:
@@ -258,7 +350,7 @@ def make_single_point_trajectory(joint_names: list[str], joints: list[float], *,
 def quaternion_to_rpy_deg(qx: float, qy: float, qz: float, qw: float) -> tuple[float, float, float]:
     """Return roll, pitch, yaw in degrees from quaternion.
 
-    This avoids adding scipy as a runtime dependency in moveit_dual.py while
+    This avoids adding scipy as a runtime dependency in moveit_dual_client.py while
     matching task_pose_selector.py's use of xyz Euler angles for the roll/pitch
     orientation envelope.
     """
@@ -289,7 +381,7 @@ def make_task_pre_pose(target_pose: Pose, offset: float = TASK_PRE_GRASP_OFFSET)
     """Return the same pre-grasp pose policy used by task_pose_selector.py.
 
     task_pose_selector.py delegates this to pick_skill.pre_grasp_of(). Import it
-    lazily so moveit_dual.py does not create package import cycles at startup.
+    lazily so moveit_dual_client.py does not create package import cycles at startup.
     If the helper is not available, fall back to a simple upward Z offset.
     """
     try:
@@ -473,6 +565,82 @@ def strip_to_arm_joints(traj: JointTrajectory, arm: Arm) -> JointTrajectory:
         dst.time_from_start = copy_point_time(src)
         out.points.append(dst)
     return out
+
+
+class LiftTrajectoryClient:
+    """Direct FollowJointTrajectory client for the vertical lift joint."""
+
+    def __init__(
+        self,
+        node: Node,
+        *,
+        action_name: str = LIFT_CONTROLLER_ACTION,
+        joint_name: str = LIFT_JOINT_NAME,
+    ):
+        self._node = node
+        self._log = node.get_logger()
+        self._action_name = action_name
+        self._joint_name = joint_name
+        self._client = ActionClient(node, FollowJointTrajectory, action_name)
+
+    def move_to(
+        self,
+        position: float,
+        *,
+        duration_sec: float = 10.0,
+        timeout_sec: float = 15.0,
+    ) -> bool:
+        if not self._client.wait_for_server(timeout_sec=timeout_sec):
+            self._log.error(f"[lift] action server not available: {self._action_name}")
+            return False
+
+        traj = JointTrajectory()
+        traj.joint_names = [self._joint_name]
+
+        point = JointTrajectoryPoint()
+        point.positions = [float(position)]
+        point.velocities = [0.0]
+        point.time_from_start = duration_from_seconds(duration_sec)
+        traj.points.append(point)
+
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = traj
+
+        self._log.info(
+            f"[lift] moving {self._joint_name} to {float(position):.3f} "
+            f"via {self._action_name}"
+        )
+
+        try:
+            send_future = self._client.send_goal_async(goal)
+            goal_handle = wait_future(send_future, timeout_sec=timeout_sec)
+
+            if goal_handle is None or not goal_handle.accepted:
+                self._log.error("[lift] goal rejected")
+                return False
+
+            result_future = goal_handle.get_result_async()
+            wrapped = wait_future(result_future, timeout_sec=timeout_sec + duration_sec + 2.0)
+
+            status = int(getattr(wrapped, "status", GoalStatus.STATUS_UNKNOWN))
+            result_msg = getattr(wrapped, "result", None)
+            error_code = getattr(result_msg, "error_code", 0)
+            error_string = getattr(result_msg, "error_string", "")
+
+            if status != GoalStatus.STATUS_SUCCEEDED:
+                self._log.error(f"[lift] failed: status={status}, error_string={error_string}")
+                return False
+
+            if error_code not in (0, None):
+                self._log.error(f"[lift] controller error_code={error_code}, error_string={error_string}")
+                return False
+
+            self._log.info(f"[lift] reached {float(position):.3f}")
+            return True
+
+        except Exception as exc:
+            self._log.error(f"[lift] exception while moving lift: {exc}")
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +873,16 @@ class SymmetricDualArmClient:
             return None
         return [float(name_to_pos[n]) for n in names]
 
+    def log_joint_summary(self, title: str) -> None:
+        self.log.info(f"==== {title} ====")
+        left = self.get_joints(Arm.LEFT)
+        right = self.get_joints(Arm.RIGHT)
+        if left is None or right is None:
+            self.log.error("joint state unavailable")
+            return
+        self.log.info(f"[left]  {dict(zip(ARM_L_JOINTS, [round(v, 4) for v in left]))}")
+        self.log.info(f"[right] {dict(zip(ARM_R_JOINTS, [round(v, 4) for v in right]))}")
+
     def current_robot_state(self) -> RobotState:
         with self._joint_lock:
             js = copy.deepcopy(self._joint_state)
@@ -713,6 +891,49 @@ class SymmetricDualArmClient:
         state = RobotState()
         state.joint_state = js
         return state
+
+    def check_reachable(
+        self,
+        pose: Pose,
+        arm: Arm = Arm.LEFT,
+        *,
+        start_joint_state: Optional[list[float]] = None,
+        timeout_sec: float = 5.0,
+    ) -> bool:
+        """Return True if a valid IK solution exists for pose on the given arm."""
+        with self._moveit_locks[arm]:
+            moveit2 = self._moveit(arm)
+            position = (pose.position.x, pose.position.y, pose.position.z)
+            quat = (
+                pose.orientation.x,
+                pose.orientation.y,
+                pose.orientation.z,
+                pose.orientation.w,
+            )
+            try:
+                future = moveit2.compute_ik_async(
+                    position,
+                    quat,
+                    start_joint_state=start_joint_state,
+                )
+            except TypeError:
+                future = moveit2.compute_ik_async(position, quat)
+
+            if future is None:
+                self.log.warn(f"[check_reachable] [{arm.value}] compute_ik_async returned None")
+                return False
+
+            deadline = time.time() + float(timeout_sec)
+            while not future.done():
+                if time.time() > deadline:
+                    self.log.error(f"[check_reachable] [{arm.value}] IK timeout after {timeout_sec}s")
+                    return False
+                time.sleep(0.05)
+
+            result = moveit2.get_compute_ik_result(future)
+            reachable = result is not None and len(getattr(result, "name", [])) > 0
+            self.log.info(f"[check_reachable] [{arm.value}] reachable={reachable}")
+            return reachable
 
     def get_pose(self, arm: Arm = Arm.LEFT, timeout_sec: float = 5.0) -> Optional[Pose]:
         """Return current end-effector pose through MoveIt FK.
@@ -820,6 +1041,28 @@ class SymmetricDualArmClient:
             raise RuntimeError("joint states unavailable")
         left_traj = make_interpolated_trajectory(ARM_L_JOINTS, left_current, LEFT_SYMMETRY_REF, duration_sec=duration_sec, points=points)
         right_traj = make_interpolated_trajectory(ARM_R_JOINTS, right_current, RIGHT_SYMMETRY_REF, duration_sec=duration_sec, points=points)
+        return left_traj, right_traj
+
+    def build_attention_trajectories(self, duration_sec: float = 5.0, points: int = 30) -> tuple[JointTrajectory, JointTrajectory]:
+        """Build direct controller trajectories to the full-extended attention pose."""
+        left_current = self.get_joints(Arm.LEFT)
+        right_current = self.get_joints(Arm.RIGHT)
+        if left_current is None or right_current is None:
+            raise RuntimeError("joint states unavailable")
+        left_traj = make_interpolated_trajectory(
+            ARM_L_JOINTS,
+            left_current,
+            LEFT_ATTENTION_TARGET,
+            duration_sec=duration_sec,
+            points=points,
+        )
+        right_traj = make_interpolated_trajectory(
+            ARM_R_JOINTS,
+            right_current,
+            RIGHT_ATTENTION_TARGET,
+            duration_sec=duration_sec,
+            points=points,
+        )
         return left_traj, right_traj
 
     def build_symmetric_trajectories_from_left_target(
@@ -1042,13 +1285,22 @@ class SymmetricDualArmClient:
         if not segment.points:
             raise RuntimeError("cannot append an empty trajectory segment")
 
-        # Make the boundary explicit and deterministic. When appending after an
-        # existing segment the first point is skipped, but setting it still keeps
-        # the segment internally continuous before retiming.
-        segment.points[0].positions = list(start_joint_state)
+        if len(segment.points) == 1:
+            final_point = copy.deepcopy(segment.points[0])
+            start_point = copy.deepcopy(segment.points[0])
+            start_point.positions = list(start_joint_state)
+            start_point.time_from_start = duration_from_seconds(0.0)
+            if duration_sec is not None:
+                final_point.time_from_start = duration_from_seconds(duration_sec)
+            segment.points = [start_point, final_point]
+        else:
+            # Make the boundary explicit and deterministic. When appending after an
+            # existing segment the first point is skipped, but setting it still keeps
+            # the segment internally continuous before retiming.
+            segment.points[0].positions = list(start_joint_state)
 
-        if duration_sec is not None:
-            segment = retime_trajectory(segment, duration_sec)
+            if duration_sec is not None:
+                segment = retime_trajectory(segment, duration_sec)
 
         append_trajectory_segment(
             combined,
@@ -1276,10 +1528,11 @@ class SymmetricDualArmClient:
         include_task_target: bool = True,
         pre_grasp_offset: float = TASK_PRE_GRASP_OFFSET,
         enforce_task_path_quality: bool = False,
+        skip_current_pose_check: bool = False,
     ) -> tuple[JointTrajectory, JointTrajectory, list[list[float]]]:
         """Plan LEFT-arm waypoints, then mirror the resulting path to RIGHT.
 
-        The dual-arm strategy is unchanged from the original moveit_dual.py:
+        The dual-arm strategy is unchanged from the original moveit_dual_client.py:
         only the LEFT path is planned, the RIGHT path is generated by the
         calibrated mirror mapping, and both final JointTrajectory goals are sent
         to the two arm controllers together by execute_both().
@@ -1393,7 +1646,11 @@ class SymmetricDualArmClient:
             # seed the combined trajectory with the current joints and continue
             # to the next waypoint. This is especially useful when the first
             # waypoint is copied from tf2_echo.
-            if not combined_left.points and self._is_current_pose_goal(raw_pose, Arm.LEFT):
+            if (
+                not skip_current_pose_check
+                and not combined_left.points
+                and self._is_current_pose_goal(raw_pose, Arm.LEFT)
+            ):
                 self.log.info(
                     f"[waypoint-plan] LEFT waypoint {index + 1} is already the current EE pose; "
                     "using current joint state as the first trajectory point"
@@ -1590,7 +1847,7 @@ class SymmetricDualArmClient:
         right_traj = mirror_left_trajectory_to_right(left_traj)
         right_current = self.get_joints(Arm.RIGHT)
         if right_current is not None and right_traj.points:
-            # Preserve moveit_dual.py's controller-side safety behavior: avoid
+            # Preserve moveit_dual_client.py's controller-side safety behavior: avoid
             # an initial right-arm jump if the robot is not exactly symmetric.
             right_traj.points[0].positions = list(right_current)
 

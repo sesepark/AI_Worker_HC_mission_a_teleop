@@ -1,0 +1,7 @@
+zone_b_pick_pose:
+  point:
+    # Absolute y position in base_link. x/z are derived from the box center
+    # in zone_b_pick.yaml: x = box depth center, z = box height center.
+    y: 0.246
+    diameter: 0.04
+    color_rgba: [1.0, 0.05, 0.05, 1.0]

@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-"""
-planning_scene_b.py
-
-Zone B only planning scene and RViz marker utilities.
-
-This file intentionally loads only config/zone_b.yaml.
-It avoids importing Zone A/C/D configs when testing Zone B.
-"""
-
 from __future__ import annotations
 
 import os
@@ -28,7 +18,41 @@ from rclpy.qos import (
 )
 
 
-FRAME_ID = "base_link"
+FRAME_ID = "odom"
+
+_TF_LOOKUP_TIMEOUT_SEC = 2.0
+_TF_POLL_SEC           = 0.05
+
+
+def _lookup_base_to_odom(node):
+    """현재 odom→base_link TF를 조회. 타임아웃 시 None 반환."""
+    import time as _time
+    import tf2_ros
+    from rclpy.time import Time as _Time
+    buf = tf2_ros.Buffer()
+    tf2_ros.TransformListener(buf, node)
+    deadline = _time.time() + _TF_LOOKUP_TIMEOUT_SEC
+    while _time.time() < deadline:
+        try:
+            return buf.lookup_transform('odom', 'base_link', _Time())
+        except tf2_ros.TransformException:
+            _time.sleep(_TF_POLL_SEC)
+    node.get_logger().warn('[planning_scene_b] odom→base_link TF lookup 타임아웃, base_link 좌표 그대로 사용')
+    return None
+
+
+def _apply_tf(tf_stamped, pos: tuple) -> tuple:
+    """TransformStamped를 적용해 base_link 좌표 → odom 좌표 변환."""
+    if tf_stamped is None:
+        return pos
+    x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+    t = tf_stamped.transform.translation
+    q = tf_stamped.transform.rotation
+    qx, qy, qz, qw = q.x, q.y, q.z, q.w
+    rx = (1 - 2*(qy**2 + qz**2))*x + 2*(qx*qy - qz*qw)*y + 2*(qx*qz + qy*qw)*z
+    ry = 2*(qx*qy + qz*qw)*x + (1 - 2*(qx**2 + qz**2))*y + 2*(qy*qz - qx*qw)*z
+    rz = 2*(qx*qz - qy*qw)*x + 2*(qy*qz + qx*qw)*y + (1 - 2*(qx**2 + qy**2))*z
+    return (rx + t.x, ry + t.y, rz + t.z)
 
 PACKAGE_NAME = "manipulation"
 PACKAGE_SHARE_DIR = get_package_share_directory(PACKAGE_NAME)
@@ -171,12 +195,13 @@ ZONE_B_STOPLINE_POSITION = (
 # Collision object helpers
 # =============================================================================
 
-def _add_box(client: MoveItClient, obj_id: str, size: tuple, position: tuple) -> None:
+def _add_box(client: MoveItClient, obj_id: str, size: tuple, position: tuple, frame_id: str = "base_link") -> None:
     client._moveit_r.add_collision_box(
         id=obj_id,
         size=size,
         position=position,
         quat_xyzw=(0.0, 0.0, 0.0, 1.0),
+        frame_id=frame_id,
     )
 
 
@@ -192,41 +217,17 @@ def clear_all_objects(client: MoveItClient) -> None:
 
 
 def setup_zone_b(client: MoveItClient) -> None:
-    _add_box(
-        client,
-        ZONE_B_CONVEYOR_ID,
-        ZONE_B_CONVEYOR_SIZE,
-        ZONE_B_CONVEYOR_POSITION,
-    )
-    _add_box(
-        client,
-        ZONE_B_BOX_ID,
-        ZONE_B_BOX_SIZE,
-        ZONE_B_BOX_POSITION,
-    )
-    _add_box(
-        client,
-        ZONE_B_DEST_TABLE_BODY_ID,
-        ZONE_B_DEST_TABLE_BODY_SIZE,
-        ZONE_B_DEST_TABLE_BODY_POSITION,
-    )
-    _add_box(
-        client,
-        ZONE_B_DEST_TABLE_TOP_ID,
-        ZONE_B_DEST_TABLE_TOP_SIZE,
-        ZONE_B_DEST_TABLE_TOP_POSITION,
-    )
-
+    _remove_obj(client, ZONE_B_BOX_ID)
+    odom_tf = _lookup_base_to_odom(client._node)
+    _p = lambda pos: _apply_tf(odom_tf, pos)
+    _add_box(client, ZONE_B_CONVEYOR_ID,       ZONE_B_CONVEYOR_SIZE,       _p(ZONE_B_CONVEYOR_POSITION),       "odom")
+    _add_box(client, ZONE_B_DEST_TABLE_BODY_ID, ZONE_B_DEST_TABLE_BODY_SIZE, _p(ZONE_B_DEST_TABLE_BODY_POSITION), "odom")
+    _add_box(client, ZONE_B_DEST_TABLE_TOP_ID,  ZONE_B_DEST_TABLE_TOP_SIZE,  _p(ZONE_B_DEST_TABLE_TOP_POSITION),  "odom")
     for i, pos in enumerate(ZONE_B_DEST_TABLE_LEG_POSITIONS):
-        _add_box(
-            client,
-            f"zone_b_dest_table_leg_{i}",
-            ZONE_B_DEST_TABLE_LEG_SIZE,
-            pos,
-        )
-
+        _add_box(client, f"zone_b_dest_table_leg_{i}", ZONE_B_DEST_TABLE_LEG_SIZE, _p(pos), "odom")
     client._node.get_logger().info(
-        "[planning_scene_b] Zone B collision objects 등록 완료"
+        "[planning_scene_b] Zone B collision objects 등록 완료 "
+        "(zone_b_box는 시각화만 하고 collision object에서 제외)"
     )
 
 
@@ -382,7 +383,7 @@ def get_zone_b_markers() -> MarkerArray:
 class EnvironmentVisualizer:
     def __init__(self, node):
         qos = QoSProfile(
-            durability=QoSDurabilityPolicy.VOLATILE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10,
@@ -400,4 +401,3 @@ class EnvironmentVisualizer:
         marker.action = Marker.DELETEALL
         marker_array.markers.append(marker)
         self._pub.publish(marker_array)
-

@@ -1,690 +1,501 @@
-#!/usr/bin/env python3
-"""
-test_dual_box.py
-
-Python-file-driven box-style symmetric waypoint test.
-
-Edit the USER CONFIG section below to set LEFT-arm waypoints directly in this
-.py file. Each waypoint includes position and orientation. The script then:
-
-1. Uses the two file-defined LEFT waypoints in order; no GPD data is read.
-2. Filters/plans each waypoint with task_pose_selector-style policy using MoveIt2.plan_async().
-3. Concatenates those LEFT trajectory segments in waypoint order.
-4. Mirrors that LEFT joint trajectory into RIGHT-arm joint space.
-5. Sends both trajectories directly to:
-
-     /arm_l_controller/follow_joint_trajectory
-     /arm_r_controller/follow_joint_trajectory
-
-This avoids sending simultaneous goals to MoveIt's /move_action server.
-"""
-
 from __future__ import annotations
 
 import argparse
+import copy
 import math
 import sys
 import time
-import traceback
-from typing import Iterable
 
 import rclpy
-from action_msgs.msg import GoalStatus
-from control_msgs.action import FollowJointTrajectory
-from geometry_msgs.msg import Pose, PoseStamped
-from moveit_msgs.msg import MoveItErrorCodes, RobotState
-from moveit_msgs.srv import GetPositionIK
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from ai_worker_manipulation.robot_interface.moveit_dual import (
-    ARM_GROUP,
-    ARM_EEF,
+from manipulation.robot_interface.moveit_dual_client import (
     ARM_L_JOINTS,
     ARM_R_JOINTS,
-    BASE_LINK,
     Arm,
+    LIFT_JOINT_NAME,
+    LiftTrajectoryClient,
     SymmetricDualArmClient,
     duration_from_seconds,
+    mirror_left_joints_to_right,
+    mirror_left_trajectory_to_right,
+    retime_trajectory,
+)
+from manipulation.robot_interface.planning_scene_b_pick import (
+    add_zone_b_box_collision,
+    remove_zone_b_box_collision,
 )
 
 
 # =============================================================================
-# USER CONFIG - edit only this section for normal waypoint testing
+# USER CONFIG
 # =============================================================================
 
-# Whether the robot should first move to the current symmetry reference pose.
-HOME_FIRST = False
+# LEFT arm waypoint2 joint values in ARM_L_JOINTS order, degree.
+# Rounded to integer degrees from:
+# -36.527, 2.687, -0.861, -57.786, 92.732, 0.705, 4.310
+LEFT_WAYPOINT2_JOINTS_DEG: list[float] = [
+    -37.0,  # arm_l_joint1
+    3.0,    # arm_l_joint2
+    -1.0,   # arm_l_joint3
+    -58.0,  # arm_l_joint4
+    93.0,   # arm_l_joint5
+    1.0,    # arm_l_joint6
+    4.0,    # arm_l_joint7
+]
 
-# Whether the robot should return to the symmetry reference pose after the test.
-RETURN_HOME = False
+# waypoint1 is copied from waypoint2, except arm_l_joint2/3 are replaced by these.
+LEFT_WAYPOINT1_JOINT2_DEG = 24.0
+LEFT_WAYPOINT1_JOINT3_DEG = 7.0
 
-# If True, plan trajectories but do not execute controller goals.
-PLAN_ONLY = False
 
-# Use direct fixed-waypoint path generation before mirroring. This does not read GPD data.
-# Input waypoint position and orientation are kept as given. The two waypoints in
-# LEFT_WAYPOINTS are executed sequentially. Set this to True only when you
-# intentionally want task_pose_selector pick-style pre-grasp filtering.
-USE_TASK_SELECTOR = False
-INCLUDE_TASK_TARGET = True
-TASK_PRE_GRASP_OFFSET = 0.15
+# =============================================================================
+# Parameters
+# =============================================================================
 
-# Time spent between consecutive waypoints.
 SEGMENT_DURATION_SEC = 4.0
-
-# Number of interpolated joint trajectory points per segment.
-POINTS_PER_SEGMENT = 25
-
-# Controller action timeout.
+JOINT2_DURATION_SEC = 4.0
+JOINT3_DURATION_SEC = 4.0
+JOINT_PAUSE_SEC = 1.0
+JOINT_MOVE_POINTS = 25
 TIMEOUT_SEC = 30.0
-
-# Lift motion.
-# Sequence when both lift flags are True:
-#   wp1 arrival -> wait 2 sec -> lift down by 0.45
-#   -> wp2 arrival -> wait 4 sec -> lift home(0.0)
-#
-# Set these flags to True/False depending on whether the lift should move
-# after each waypoint.
-MOVE_LIFT_DOWN_AFTER_WP1 = True
-MOVE_LIFT_HOME_AFTER_WP2 = True
 
 LIFT_HOME = 0.0
 LIFT_DROP = 0.45
 LIFT_DOWN = LIFT_HOME - LIFT_DROP
 WAIT_AFTER_WP1_SEC = 2.0
 LIFT_WAIT_AFTER_WP2_SEC = 4.0
-
-# 5x slower than the previous 2.0 sec lift motion.
 LIFT_MOVE_DURATION_SEC = 10.0
 LIFT_TIMEOUT_SEC = 15.0
+LIFT_MIN_MOVE_DURATION_SEC = 0.5
+PLANNING_SCENE_SETTLE_SEC = 0.5
 
-# Change these two names if your robot uses different lift controller / joint names.
-LIFT_CONTROLLER_ACTION = "/lift_controller/follow_joint_trajectory"
-LIFT_JOINT_NAME = "lift_joint"
-
-# LEFT-arm waypoints.
-#
-# You can specify orientation in either of the following formats:
-#   "quat": [qx, qy, qz, qw]
-#   "rpy_deg": [roll_deg, pitch_deg, yaw_deg]
-#
-# If both are provided, quat is used.
-# Right-arm trajectory is NOT planned independently. It is generated by mirroring
-# the left joint trajectory with the symmetry mapping in moveit_dual.py.
-LEFT_WAYPOINTS = [
-    {
-        "name": "wp1",
-        "position": [0.5, 0.35, 1.2],
-        #"quat": [0.0, 0.0, 0.0, 1.0],
-        "rpy_deg": [-90.0, 0.0, 90.0],
-        # 높이: 0m
-    },
-    {
-        "name": "wp2",
-        "position": [0.5, 0.23, 1.2],
-        #"quat": [0.0, 0.0, 0.0, 1.0],
-        "rpy_deg": [-90.0, 0.0, 90.0],
-        # 높이: -0.45m
-    },
-]
+MOVEIT_VELOCITY = 0.05
+MOVEIT_ACCELERATION = 0.05
 
 # =============================================================================
-# End of USER CONFIG
-# =============================================================================
 
 
-def normalize_quaternion(quat: Iterable[float]) -> tuple[float, float, float, float]:
-    values = tuple(float(v) for v in quat)
-    if len(values) != 4:
-        raise ValueError("quaternion must have exactly 4 values: qx qy qz qw")
-    qx, qy, qz, qw = values
-    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
-    if norm < 1.0e-9:
-        raise ValueError("quaternion norm is zero")
-    return (qx / norm, qy / norm, qz / norm, qw / norm)
+def parse_args(args=None):
+    parser = argparse.ArgumentParser(
+        description=(
+            "Dual pick variant: MoveIt plans to wp1 with zone_b_box as an obstacle, "
+            "then lift drops and joint2 moves first, waits, then joint3 moves to wp2."
+        )
+    )
+    parser.add_argument(
+        "--wp2-left-joints-deg",
+        "--wp2-left-joints",
+        type=float,
+        nargs=7,
+        default=None,
+        metavar=("J1", "J2", "J3", "J4", "J5", "J6", "J7"),
+        help="LEFT arm waypoint2 joint values in degrees. Overrides LEFT_WAYPOINT2_JOINTS_DEG.",
+    )
+    parser.add_argument(
+        "--wp1-left-joint2-deg",
+        type=float,
+        default=None,
+        help="LEFT arm joint2 value for waypoint1 in degrees. Overrides LEFT_WAYPOINT1_JOINT2_DEG.",
+    )
+    parser.add_argument(
+        "--wp1-left-joint3-deg",
+        "--wp1-left-joint3",
+        type=float,
+        default=None,
+        help="LEFT arm joint3 value for waypoint1 in degrees. Overrides LEFT_WAYPOINT1_JOINT3_DEG.",
+    )
+    parser.add_argument("--segment-duration-sec", type=float, default=SEGMENT_DURATION_SEC)
+    parser.add_argument("--joint2-duration-sec", type=float, default=JOINT2_DURATION_SEC)
+    parser.add_argument("--joint3-duration-sec", type=float, default=JOINT3_DURATION_SEC)
+    parser.add_argument("--joint-pause-sec", type=float, default=JOINT_PAUSE_SEC)
+    parser.add_argument("--joint-points", type=int, default=JOINT_MOVE_POINTS)
+    return parser.parse_known_args(args=args)
 
 
-def quaternion_from_rpy_deg(
-    roll_deg: float,
-    pitch_deg: float,
-    yaw_deg: float,
-) -> tuple[float, float, float, float]:
-    """Return qx, qy, qz, qw from roll/pitch/yaw in degrees."""
-    roll = math.radians(float(roll_deg))
-    pitch = math.radians(float(pitch_deg))
-    yaw = math.radians(float(yaw_deg))
-
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-
-    qw = cr * cp * cy + sr * sp * sy
-    qx = sr * cp * cy - cr * sp * sy
-    qy = cr * sp * cy + sr * cp * sy
-    qz = cr * cp * sy - sr * sp * cy
-    return normalize_quaternion((qx, qy, qz, qw))
+def format_joints(joints: list[float], *, precision: int = 4) -> str:
+    return "[" + ", ".join(f"{v:.{precision}f}" for v in joints) + "]"
 
 
-def make_pose_from_quat(x: float, y: float, z: float, quat: Iterable[float]) -> Pose:
-    qx, qy, qz, qw = normalize_quaternion(quat)
-    pose = Pose()
-    pose.position.x = float(x)
-    pose.position.y = float(y)
-    pose.position.z = float(z)
-    pose.orientation.x = qx
-    pose.orientation.y = qy
-    pose.orientation.z = qz
-    pose.orientation.w = qw
-    return pose
+def degrees_to_radians(values: list[float]) -> list[float]:
+    return [math.radians(float(value)) for value in values]
 
 
-def waypoint_to_pose(waypoint: dict) -> tuple[str, Pose]:
-    name = str(waypoint.get("name", "unnamed"))
-    if "position" not in waypoint:
-        raise ValueError(f"{name} is missing position: [x, y, z]")
+def radians_to_degrees(values: list[float]) -> list[float]:
+    return [math.degrees(float(value)) for value in values]
 
-    position = tuple(float(v) for v in waypoint["position"])
-    if len(position) != 3:
-        raise ValueError(f"{name} position must have exactly 3 values: x y z")
 
-    if "quat" in waypoint and waypoint["quat"] is not None:
-        quat = normalize_quaternion(waypoint["quat"])
-    elif "rpy_deg" in waypoint and waypoint["rpy_deg"] is not None:
-        rpy = tuple(float(v) for v in waypoint["rpy_deg"])
-        if len(rpy) != 3:
-            raise ValueError(f"{name} rpy_deg must have exactly 3 values")
-        quat = quaternion_from_rpy_deg(rpy[0], rpy[1], rpy[2])
+def resolved_left_waypoints(ns: argparse.Namespace) -> tuple[list[float], list[float]]:
+    raw_wp2_deg = ns.wp2_left_joints_deg
+    if raw_wp2_deg is None:
+        raw_wp2_deg = LEFT_WAYPOINT2_JOINTS_DEG
+    if len(raw_wp2_deg) != 7:
+        raise ValueError(
+            "Set LEFT_WAYPOINT2_JOINTS_DEG in test_dual_pick.py, "
+            "or pass --wp2-left-joints-deg J1 J2 J3 J4 J5 J6 J7."
+        )
+
+    wp1_joint2_deg = ns.wp1_left_joint2_deg
+    if wp1_joint2_deg is None:
+        wp1_joint2_deg = LEFT_WAYPOINT1_JOINT2_DEG
+    wp1_joint3_deg = ns.wp1_left_joint3_deg
+    if wp1_joint3_deg is None:
+        wp1_joint3_deg = LEFT_WAYPOINT1_JOINT3_DEG
+    if wp1_joint2_deg is None:
+        raise ValueError(
+            "Set LEFT_WAYPOINT1_JOINT2_DEG in test_dual_pick.py, "
+            "or pass --wp1-left-joint2-deg VALUE."
+        )
+    if wp1_joint3_deg is None:
+        raise ValueError(
+            "Set LEFT_WAYPOINT1_JOINT3_DEG in test_dual_pick.py, "
+            "or pass --wp1-left-joint3-deg VALUE."
+        )
+
+    wp2 = degrees_to_radians([float(value) for value in raw_wp2_deg])
+    wp1 = list(wp2)
+    wp1[1] = math.radians(float(wp1_joint2_deg))
+    wp1[2] = math.radians(float(wp1_joint3_deg))
+    return wp1, wp2
+
+
+def get_lift_position(client: SymmetricDualArmClient) -> float | None:
+    state = client.current_robot_state()
+    names = list(state.joint_state.name)
+    positions = list(state.joint_state.position)
+    try:
+        return float(positions[names.index(LIFT_JOINT_NAME)])
+    except ValueError:
+        return None
+
+
+def lift_duration_at_nominal_speed(
+    client: SymmetricDualArmClient,
+    target: float,
+    log,
+) -> float:
+    current = get_lift_position(client)
+    if current is None:
+        log.warn(
+            f"[lift] {LIFT_JOINT_NAME} not found in joint_states; "
+            f"using default duration {LIFT_MOVE_DURATION_SEC:.1f}s"
+        )
+        return LIFT_MOVE_DURATION_SEC
+
+    nominal_speed = abs(LIFT_DROP) / LIFT_MOVE_DURATION_SEC
+    distance = abs(float(target) - current)
+    duration = max(LIFT_MIN_MOVE_DURATION_SEC, distance / nominal_speed)
+    log.info(
+        f"[lift] current={current:.3f}, target={float(target):.3f}, "
+        f"distance={distance:.3f}, duration={duration:.2f}s "
+        f"(speed={nominal_speed:.3f}m/s)"
+    )
+    return duration
+
+
+def with_explicit_start(traj: JointTrajectory, start_joints: list[float]) -> JointTrajectory:
+    out = copy.deepcopy(traj)
+    if not out.points:
+        raise RuntimeError("trajectory is empty")
+
+    if len(out.points) == 1:
+        final_point = copy.deepcopy(out.points[0])
+        start_point = copy.deepcopy(out.points[0])
+        start_point.positions = list(start_joints)
+        start_point.time_from_start = duration_from_seconds(0.0)
+        out.points = [start_point, final_point]
     else:
-        raise ValueError(f"{name} must provide either quat or rpy_deg")
-
-    pose = make_pose_from_quat(position[0], position[1], position[2], quat)
-    return name, pose
-
-
-def resolve_waypoint_poses() -> list[tuple[str, Pose]]:
-    if len(LEFT_WAYPOINTS) < 2:
-        raise ValueError("LEFT_WAYPOINTS must contain at least two waypoints")
-    return [waypoint_to_pose(wp) for wp in LEFT_WAYPOINTS]
-
-
-def copy_pose_with_z_offset(pose: Pose, dz: float) -> Pose:
-    """Return a copy of pose with position.z shifted by dz."""
-    out = Pose()
-    out.position.x = pose.position.x
-    out.position.y = pose.position.y
-    out.position.z = pose.position.z + float(dz)
-    out.orientation = pose.orientation
+        out.points[0].positions = list(start_joints)
     return out
 
 
-def pose_str(pose: Pose) -> str:
-    p = pose.position
-    q = pose.orientation
-    return (
-        f"pos=({p.x:.3f}, {p.y:.3f}, {p.z:.3f}), "
-        f"quat=({q.x:.3f}, {q.y:.3f}, {q.z:.3f}, {q.w:.3f})"
-    )
-
-
-def wait_future(future, timeout_sec: float):
-    deadline = time.time() + timeout_sec
-    while not future.done():
-        if time.time() > deadline:
-            raise TimeoutError("future timeout")
-        time.sleep(0.01)
-    return future.result()
-
-
-class LiftTrajectoryClient:
-    """Small direct FollowJointTrajectory client for the vertical lift joint."""
-
-    def __init__(
-        self,
-        node: Node,
-        *,
-        action_name: str = LIFT_CONTROLLER_ACTION,
-        joint_name: str = LIFT_JOINT_NAME,
-    ):
-        self._node = node
-        self._log = node.get_logger()
-        self._action_name = action_name
-        self._joint_name = joint_name
-        self._client = ActionClient(node, FollowJointTrajectory, action_name)
-
-    def move_to(
-        self,
-        position: float,
-        *,
-        duration_sec: float = LIFT_MOVE_DURATION_SEC,
-        timeout_sec: float = LIFT_TIMEOUT_SEC,
-    ) -> bool:
-        if not self._client.wait_for_server(timeout_sec=timeout_sec):
-            self._log.error(f"[lift] action server not available: {self._action_name}")
-            return False
-
-        traj = JointTrajectory()
-        traj.joint_names = [self._joint_name]
-
-        point = JointTrajectoryPoint()
-        point.positions = [float(position)]
-        point.velocities = [0.0]
-        point.time_from_start = duration_from_seconds(duration_sec)
-        traj.points.append(point)
-
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = traj
-
-        self._log.info(
-            f"[lift] moving {self._joint_name} to {float(position):.3f} "
-            f"via {self._action_name}"
-        )
-
-        try:
-            send_future = self._client.send_goal_async(goal)
-            goal_handle = wait_future(send_future, timeout_sec=timeout_sec)
-
-            if goal_handle is None or not goal_handle.accepted:
-                self._log.error("[lift] goal rejected")
-                return False
-
-            result_future = goal_handle.get_result_async()
-            wrapped = wait_future(result_future, timeout_sec=timeout_sec + duration_sec + 2.0)
-
-            status = int(getattr(wrapped, "status", GoalStatus.STATUS_UNKNOWN))
-            result_msg = getattr(wrapped, "result", None)
-            error_code = getattr(result_msg, "error_code", 0)
-            error_string = getattr(result_msg, "error_string", "")
-
-            if status != GoalStatus.STATUS_SUCCEEDED:
-                self._log.error(f"[lift] failed: status={status}, error_string={error_string}")
-                return False
-
-            if error_code not in (0, None):
-                self._log.error(f"[lift] controller error_code={error_code}, error_string={error_string}")
-                return False
-
-            self._log.info(f"[lift] reached {float(position):.3f}")
-            return True
-
-        except Exception as exc:
-            self._log.error(f"[lift] exception while moving lift: {exc}")
-            return False
-
-
-def robot_state_with_left_seed(
+def plan_wp1_with_moveit_then_mirror(
     client: SymmetricDualArmClient,
-    left_seed: list[float] | None,
-) -> RobotState:
-    state = client.current_robot_state()
-    if left_seed is None:
-        return state
-
-    if len(left_seed) != 7:
-        raise ValueError(f"left_seed must have length 7, got {len(left_seed)}")
-
-    names = list(state.joint_state.name)
-    positions = list(state.joint_state.position)
-    name_to_index = {name: i for i, name in enumerate(names)}
-
-    for joint_name, joint_value in zip(ARM_L_JOINTS, left_seed):
-        if joint_name not in name_to_index:
-            raise RuntimeError(f"{joint_name} not found in current RobotState")
-        positions[name_to_index[joint_name]] = float(joint_value)
-
-    state.joint_state.position = positions
-    return state
-
-
-def compute_left_ik(
-    node: Node,
-    client: SymmetricDualArmClient,
-    ik_client,
-    pose: Pose,
+    left_wp1: list[float],
     *,
-    left_seed: list[float] | None = None,
-    timeout_sec: float = 5.0,
-) -> list[float]:
-    log = node.get_logger()
-    if not ik_client.wait_for_service(timeout_sec=timeout_sec):
-        raise RuntimeError("Timed out waiting for /compute_ik")
+    duration_sec: float,
+    timeout_sec: float,
+) -> tuple[JointTrajectory, JointTrajectory]:
+    left_start = client.get_joints(Arm.LEFT)
+    right_start = client.get_joints(Arm.RIGHT)
+    if left_start is None or right_start is None:
+        raise RuntimeError("joint states unavailable")
 
-    req = GetPositionIK.Request()
-    req.ik_request.group_name = ARM_GROUP[Arm.LEFT]
-    req.ik_request.robot_state = robot_state_with_left_seed(client, left_seed)
-    req.ik_request.avoid_collisions = True
-    req.ik_request.ik_link_name = ARM_EEF[Arm.LEFT]
+    left_traj = client.plan_to_joints(
+        Arm.LEFT,
+        left_wp1,
+        velocity=MOVEIT_VELOCITY,
+        acceleration=MOVEIT_ACCELERATION,
+        timeout_sec=timeout_sec,
+    )
+    left_traj = with_explicit_start(left_traj, left_start)
+    left_traj = retime_trajectory(left_traj, duration_sec)
 
-    stamped = PoseStamped()
-    stamped.header.frame_id = BASE_LINK
-    stamped.header.stamp = node.get_clock().now().to_msg()
-    stamped.pose = pose
-    req.ik_request.pose_stamped = stamped
-    req.ik_request.timeout = duration_from_seconds(timeout_sec)
-
-    # Some MoveIt versions do not expose this field on PositionIKRequest.
-    if hasattr(req.ik_request, "attempts"):
-        req.ik_request.attempts = 5
-
-    future = ik_client.call_async(req)
-    resp = wait_future(future, timeout_sec + 2.0)
-
-    if resp.error_code.val != MoveItErrorCodes.SUCCESS:
-        raise RuntimeError(
-            f"LEFT IK failed, error_code={resp.error_code.val}, pose={pose_str(pose)}"
-        )
-
-    name_to_pos = dict(zip(resp.solution.joint_state.name, resp.solution.joint_state.position))
-    joints = [float(name_to_pos[name]) for name in ARM_L_JOINTS]
-    log.info(f"LEFT IK joints: {[round(v, 4) for v in joints]}")
-    return joints
+    right_traj = mirror_left_trajectory_to_right(left_traj)
+    if right_traj.points:
+        right_traj.points[0].positions = list(right_start)
+    return left_traj, right_traj
 
 
 def smoothstep(alpha: float) -> float:
     return 3.0 * alpha * alpha - 2.0 * alpha * alpha * alpha
 
 
-def build_left_waypoint_trajectory(
+def append_interpolated_segment(
+    traj: JointTrajectory,
     start: list[float],
-    waypoints: list[list[float]],
+    target: list[float],
     *,
-    segment_duration_sec: float,
-    points_per_segment: int,
+    start_time_sec: float,
+    duration_sec: float,
+    points: int,
+    skip_first: bool,
+) -> None:
+    if len(start) != len(target) or len(start) != len(traj.joint_names):
+        raise ValueError("trajectory joint count mismatch")
+    if duration_sec <= 0.0:
+        raise ValueError("duration_sec must be positive")
+    if points < 2:
+        raise ValueError("points must be >= 2")
+
+    for i in range(points):
+        if skip_first and i == 0:
+            continue
+        alpha = i / float(points - 1)
+        s = smoothstep(alpha)
+        point = JointTrajectoryPoint()
+        point.positions = [start[j] + s * (target[j] - start[j]) for j in range(len(start))]
+        point.time_from_start = duration_from_seconds(start_time_sec + duration_sec * alpha)
+        traj.points.append(point)
+
+
+def append_hold_point(
+    traj: JointTrajectory,
+    joints: list[float],
+    *,
+    time_sec: float,
+) -> None:
+    point = JointTrajectoryPoint()
+    point.positions = list(joints)
+    point.time_from_start = duration_from_seconds(time_sec)
+    traj.points.append(point)
+
+
+def build_two_joint_sequence(
+    joint_names: list[str],
+    current: list[float],
+    after_joint2: list[float],
+    final: list[float],
+    *,
+    joint2_duration_sec: float,
+    pause_sec: float,
+    joint3_duration_sec: float,
+    points: int,
 ) -> JointTrajectory:
-    if len(start) != 7:
-        raise ValueError("start must have length 7")
-    if not waypoints:
-        raise ValueError("at least one waypoint is required")
-    if points_per_segment < 2:
-        raise ValueError("points_per_segment must be >= 2")
-    if segment_duration_sec <= 0.0:
-        raise ValueError("segment_duration must be positive")
+    if pause_sec < 0.0:
+        raise ValueError("pause_sec must be non-negative")
 
     traj = JointTrajectory()
-    traj.joint_names = list(ARM_L_JOINTS)
+    traj.joint_names = list(joint_names)
 
-    previous = list(start)
-    elapsed = 0.0
+    append_interpolated_segment(
+        traj,
+        current,
+        after_joint2,
+        start_time_sec=0.0,
+        duration_sec=joint2_duration_sec,
+        points=points,
+        skip_first=False,
+    )
 
-    for segment_index, target in enumerate(waypoints):
-        if len(target) != 7:
-            raise ValueError("each waypoint must have length 7")
-        for i in range(points_per_segment):
-            if segment_index > 0 and i == 0:
-                continue
-            alpha = i / float(points_per_segment - 1)
-            s = smoothstep(alpha)
-            point = JointTrajectoryPoint()
-            point.positions = [previous[j] + s * (target[j] - previous[j]) for j in range(7)]
-            point.time_from_start = duration_from_seconds(elapsed + alpha * segment_duration_sec)
-            traj.points.append(point)
-        elapsed += segment_duration_sec
-        previous = list(target)
+    joint3_start_time = joint2_duration_sec + pause_sec
+    if pause_sec > 0.0:
+        append_hold_point(traj, after_joint2, time_sec=joint3_start_time)
 
+    append_interpolated_segment(
+        traj,
+        after_joint2,
+        final,
+        start_time_sec=joint3_start_time,
+        duration_sec=joint3_duration_sec,
+        points=points,
+        skip_first=True,
+    )
     return traj
 
 
-def print_joint_summary(node: Node, client: SymmetricDualArmClient, title: str) -> None:
+def build_joint2_then_joint3_to_wp2(
+    client: SymmetricDualArmClient,
+    left_wp2: list[float],
+    *,
+    joint2_duration_sec: float,
+    pause_sec: float,
+    joint3_duration_sec: float,
+    points: int,
+) -> tuple[JointTrajectory, JointTrajectory]:
+    left_current = client.get_joints(Arm.LEFT)
+    right_current = client.get_joints(Arm.RIGHT)
+    if left_current is None or right_current is None:
+        raise RuntimeError("joint states unavailable")
+
+    left_after_joint2 = list(left_current)
+    left_after_joint2[1] = float(left_wp2[1])
+    left_target = list(left_after_joint2)
+    left_target[2] = float(left_wp2[2])
+
+    mirrored_wp2 = mirror_left_joints_to_right(left_wp2)
+    right_after_joint2 = list(right_current)
+    right_after_joint2[1] = float(mirrored_wp2[1])
+    right_target = list(right_after_joint2)
+    right_target[2] = float(mirrored_wp2[2])
+
+    left_traj = build_two_joint_sequence(
+        ARM_L_JOINTS,
+        left_current,
+        left_after_joint2,
+        left_target,
+        joint2_duration_sec=joint2_duration_sec,
+        pause_sec=pause_sec,
+        joint3_duration_sec=joint3_duration_sec,
+        points=points,
+    )
+    right_traj = build_two_joint_sequence(
+        ARM_R_JOINTS,
+        right_current,
+        right_after_joint2,
+        right_target,
+        joint2_duration_sec=joint2_duration_sec,
+        pause_sec=pause_sec,
+        joint3_duration_sec=joint3_duration_sec,
+        points=points,
+    )
+    return left_traj, right_traj
+
+
+def run(ns: argparse.Namespace, ros_args: list[str]) -> int:
+    rclpy.init(args=ros_args)
+    node = Node("test_dual_pick")
     log = node.get_logger()
-    log.info(f"==== {title} ====")
-    left = client.get_joints(Arm.LEFT)
-    right = client.get_joints(Arm.RIGHT)
-    if left is None or right is None:
-        log.error("joint state unavailable")
-        return
-    log.info(f"[left]  {dict(zip(ARM_L_JOINTS, [round(v, 4) for v in left]))}")
-    log.info(f"[right] {dict(zip(ARM_R_JOINTS, [round(v, 4) for v in right]))}")
 
-
-def main(args=None) -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--home-first", action="store_true", help="Override HOME_FIRST=True")
-    parser.add_argument("--no-home-first", action="store_true", help="Override HOME_FIRST=False")
-    parser.add_argument("--return-home", action="store_true", help="Override RETURN_HOME=True")
-    parser.add_argument("--no-return-home", action="store_true", help="Override RETURN_HOME=False")
-    parser.add_argument("--plan-only", action="store_true", help="Override PLAN_ONLY=True")
-    parser.add_argument("--execute", action="store_true", help="Override PLAN_ONLY=False")
-    parser.add_argument("--raw-pose-plan", action="store_true", help="Disable task selector policy and plan raw waypoint poses directly")
-    parser.add_argument("--prepose-only", action="store_true", help="Plan only task-selector pre-grasp poses, without local target segment")
-    parser.add_argument("--include-target", action="store_true", help="Force task-selector local target segment on")
-    ns = parser.parse_args(args=args)
-
-    home_first = HOME_FIRST
-    if ns.home_first:
-        home_first = True
-    if ns.no_home_first:
-        home_first = False
-
-    return_home = RETURN_HOME
-    if ns.return_home:
-        return_home = True
-    if ns.no_return_home:
-        return_home = False
-
-    plan_only = PLAN_ONLY
-    if ns.plan_only:
-        plan_only = True
-    if ns.execute:
-        plan_only = False
-
-    use_task_selector = USE_TASK_SELECTOR
-    if ns.raw_pose_plan:
-        use_task_selector = False
-
-    include_task_target = INCLUDE_TASK_TARGET
-    if ns.prepose_only:
-        include_task_target = False
-    if ns.include_target:
-        include_task_target = True
-
-    rclpy.init(args=args)
-    node = Node("test_dual_box")
-    log = node.get_logger()
     client = SymmetricDualArmClient(node, manage_executor=True)
+    lift = LiftTrajectoryClient(node)
+    box_collision_enabled = False
 
-    exit_code = 1
     try:
-        log.info("test_dual_box uses waypoints embedded directly in test_dual_box.py")
-        client.wait_until_ready(timeout_sec=10.0)
+        left_wp1, left_wp2 = resolved_left_waypoints(ns)
+        right_wp1 = mirror_left_joints_to_right(left_wp1)
+        right_wp2 = mirror_left_joints_to_right(left_wp2)
+
+        log.info("test_dual_pick uses joint-defined wp1/wp2")
+        log.info(f"LEFT wp1 [deg] = {format_joints(radians_to_degrees(left_wp1), precision=1)}")
+        log.info(f"LEFT wp2 [deg] = {format_joints(radians_to_degrees(left_wp2), precision=1)}")
+        log.info(f"LEFT wp1 [rad] = {format_joints(left_wp1)}")
+        log.info(f"LEFT wp2 [rad] = {format_joints(left_wp2)}")
+        log.info(f"RIGHT wp1 mirrored [deg] = {format_joints(radians_to_degrees(right_wp1), precision=1)}")
+        log.info(f"RIGHT wp2 mirrored [deg] = {format_joints(radians_to_degrees(right_wp2), precision=1)}")
+        log.info(f"RIGHT wp1 mirrored [rad] = {format_joints(right_wp1)}")
+        log.info(f"RIGHT wp2 mirrored [rad] = {format_joints(right_wp2)}")
+
+        client.wait_until_ready(timeout_sec=30.0)
         time.sleep(0.2)
-        print_joint_summary(node, client, "Robot state before test_dual_box")
+        client.log_joint_summary("Robot state before test_dual_pick")
 
-        if home_first:
-            log.info("==== home-first requested ====")
-            left_home, right_home = client.build_home_trajectories(
-                duration_sec=3.0,
-                points=max(10, POINTS_PER_SEGMENT),
-            )
-            home_result = client.execute_both(left_home, right_home, timeout_sec=TIMEOUT_SEC)
-            log.info(f"home-first result: {home_result}")
-            if not home_result.both_succeeded:
-                log.error("home-first failed; stopping")
-                sys.exit(1)
-            time.sleep(0.5)
+        log.info("==== DUAL PICK JOINT SEQUENCE ====")
+        log.info(f"Step 0: ensure lift at {LIFT_HOME:.3f}")
+        log.info("Step 1: add zone_b_box collision and MoveIt-plan to wp1")
+        log.info(f"Step 2: move lift down to {LIFT_DOWN:.3f}")
+        log.info("Step 3: remove zone_b_box collision, move joint2, wait, then move joint3 to wp2")
+        log.info(f"Step 4: move lift back to {LIFT_HOME:.3f}")
 
-        resolved_waypoints = resolve_waypoint_poses()
+        if not lift.move_to(
+            LIFT_HOME,
+            duration_sec=lift_duration_at_nominal_speed(client, LIFT_HOME, log),
+            timeout_sec=LIFT_TIMEOUT_SEC,
+        ):
+            raise RuntimeError("failed to move lift to home before wp1")
 
-        log.info("==== MODE: py-file-driven box waypoints ====")
-        for name, pose in resolved_waypoints:
-            log.info(f"LEFT {name}: {pose_str(pose)}")
+        log.info("[scene] wp1 접근 계획: zone_b_box를 collision object로 사용")
+        add_zone_b_box_collision(client)
+        box_collision_enabled = True
+        time.sleep(PLANNING_SCENE_SETTLE_SEC)
 
-        left_start = client.get_joints(Arm.LEFT)
-        right_start = client.get_joints(Arm.RIGHT)
-        if left_start is None or right_start is None:
-            raise RuntimeError("joint states unavailable")
-
-        if use_task_selector:
-            log.info(
-                "Planning the two file-defined LEFT waypoints through task_pose_selector policy "
-                "(filter -> pre-grasp -> planner cascade -> optional local target), then mirroring to RIGHT"
-            )
-        else:
-            log.info("Planning LEFT raw waypoint paths with MoveIt2.plan_async, then mirroring to RIGHT")
-
-        if len(resolved_waypoints) < 2:
-            raise RuntimeError("At least two waypoints are required for lift-between-waypoints mode")
-
-        wp1_name, wp1_pose = resolved_waypoints[0]
-        wp2_name, wp2_pose_raw = resolved_waypoints[1]
-
-        # If the lift is lowered after wp1, the second waypoint is planned
-        # with z reduced by the same amount.
-        # If MOVE_LIFT_DOWN_AFTER_WP1 is False, wp2 keeps its original z value.
-        wp2_z_offset = -LIFT_DROP if MOVE_LIFT_DOWN_AFTER_WP1 else 0.0
-        wp2_pose = copy_pose_with_z_offset(wp2_pose_raw, wp2_z_offset)
-
-        log.info("==== LIFT-BETWEEN-WAYPOINTS SEQUENCE ====")
-        log.info(f"Step 1: move arms to {wp1_name}: {pose_str(wp1_pose)}")
-        log.info(f"Step 2: wait at {wp1_name} for {WAIT_AFTER_WP1_SEC:.1f}s")
-        if MOVE_LIFT_DOWN_AFTER_WP1:
-            log.info(
-                f"Step 3: move lift down to {LIFT_DOWN:.3f} "
-                f"over {LIFT_MOVE_DURATION_SEC:.1f}s"
-            )
-        else:
-            log.info("Step 3: lift down after wp1 is disabled")
-        log.info(
-            f"Step 4: move arms to {wp2_name} with z adjusted by {wp2_z_offset:.3f}: "
-            f"{pose_str(wp2_pose)}"
+        left_traj_1, right_traj_1 = plan_wp1_with_moveit_then_mirror(
+            client,
+            left_wp1,
+            duration_sec=float(ns.segment_duration_sec),
+            timeout_sec=TIMEOUT_SEC,
         )
-        if MOVE_LIFT_HOME_AFTER_WP2:
-            log.info(
-                f"Step 5: wait {LIFT_WAIT_AFTER_WP2_SEC:.1f}s, "
-                f"then move lift back to {LIFT_HOME:.3f} over {LIFT_MOVE_DURATION_SEC:.1f}s"
+        result = client.execute_both(left_traj_1, right_traj_1, timeout_sec=TIMEOUT_SEC)
+        log.info(f"wp1 result: {result}")
+        if not result.both_succeeded:
+            raise RuntimeError(f"wp1 execution failed: {result}")
+
+        log.info(f"wp1 reached; waiting {WAIT_AFTER_WP1_SEC:.1f}s before lift motion")
+        time.sleep(WAIT_AFTER_WP1_SEC)
+
+        if not lift.move_to(
+            LIFT_DOWN,
+            duration_sec=LIFT_MOVE_DURATION_SEC,
+            timeout_sec=LIFT_TIMEOUT_SEC,
+        ):
+            raise RuntimeError("failed to move lift down before wp2")
+
+        log.info("[scene] wp2 joint2/joint3 이동 전 zone_b_box collision object 제거")
+        remove_zone_b_box_collision(client)
+        box_collision_enabled = False
+        time.sleep(PLANNING_SCENE_SETTLE_SEC)
+
+        left_traj_2, right_traj_2 = build_joint2_then_joint3_to_wp2(
+            client,
+            left_wp2,
+            joint2_duration_sec=float(ns.joint2_duration_sec),
+            pause_sec=float(ns.joint_pause_sec),
+            joint3_duration_sec=float(ns.joint3_duration_sec),
+            points=int(ns.joint_points),
+        )
+        result = client.execute_both(left_traj_2, right_traj_2, timeout_sec=TIMEOUT_SEC)
+        log.info(f"wp2 joint2-then-joint3 result: {result}")
+        if not result.both_succeeded:
+            lift.move_to(
+                LIFT_HOME,
+                duration_sec=LIFT_MOVE_DURATION_SEC,
+                timeout_sec=LIFT_TIMEOUT_SEC,
             )
-        else:
-            log.info(f"Step 5: wait {LIFT_WAIT_AFTER_WP2_SEC:.1f}s; lift home after wp2 is disabled")
+            raise RuntimeError(f"wp2 joint2-then-joint3 execution failed: {result}")
 
-        def plan_one_waypoint(name: str, pose: Pose):
-            left_traj, right_traj, left_waypoint_joints = client.plan_left_waypoints_then_mirror(
-                [pose],
-                velocity=0.05,
-                acceleration=0.05,
-                segment_duration_sec=SEGMENT_DURATION_SEC,
-                timeout_sec=TIMEOUT_SEC,
-                use_task_selector=use_task_selector,
-                include_task_target=include_task_target,
-                pre_grasp_offset=TASK_PRE_GRASP_OFFSET,
-            )
+        log.info(f"wp2 reached; waiting {LIFT_WAIT_AFTER_WP2_SEC:.1f}s")
+        time.sleep(LIFT_WAIT_AFTER_WP2_SEC)
 
-            if not left_waypoint_joints:
-                raise RuntimeError(f"{name}: planner returned no left waypoint joints")
+        if not lift.move_to(
+            LIFT_HOME,
+            duration_sec=LIFT_MOVE_DURATION_SEC,
+            timeout_sec=LIFT_TIMEOUT_SEC,
+        ):
+            raise RuntimeError("failed to move lift home after wp2")
 
-            log.info(f"LEFT {name} final joints: {[round(v, 4) for v in left_waypoint_joints[-1]]}")
-            log.info(
-                f"{name}: left trajectory points={len(left_traj.points)}, "
-                f"right trajectory points={len(right_traj.points)}"
-            )
-            return left_traj, right_traj, left_waypoint_joints[-1]
-
-        if plan_only:
-            log.info("plan-only requested; planning wp1 and adjusted wp2 but not executing lift/arm goals")
-            plan_one_waypoint(wp1_name, wp1_pose)
-            plan_one_waypoint(f"{wp2_name}_z_offset_{wp2_z_offset:.2f}", wp2_pose)
-            exit_code = 0
-        else:
-            lift = LiftTrajectoryClient(node)
-
-            log.info(f"==== executing segment 1: current -> {wp1_name} ====")
-            left_traj_1, right_traj_1, _ = plan_one_waypoint(wp1_name, wp1_pose)
-            result = client.execute_both(left_traj_1, right_traj_1, timeout_sec=TIMEOUT_SEC)
-            log.info(f"{wp1_name} result: {result}")
-            log.info(
-                f"Left:  result={result.left.result.value}, "
-                f"status={result.left.status}, message={result.left.message}"
-            )
-            log.info(
-                f"Right: result={result.right.result.value}, "
-                f"status={result.right.status}, message={result.right.message}"
-            )
-            if not result.both_succeeded:
-                log.error(f"{wp1_name} execution failed; stopping before lift motion")
-                exit_code = 1
-            else:
-                log.info(f"{wp1_name} reached; waiting {WAIT_AFTER_WP1_SEC:.1f}s before next motion")
-                time.sleep(WAIT_AFTER_WP1_SEC)
-
-                should_continue_to_wp2 = True
-                if MOVE_LIFT_DOWN_AFTER_WP1:
-                    log.info(
-                        f"==== lift down after {wp1_name}: {LIFT_DOWN:.3f} "
-                        f"over {LIFT_MOVE_DURATION_SEC:.1f}s ===="
-                    )
-                    if not lift.move_to(LIFT_DOWN):
-                        log.error("lift down failed; stopping before wp2")
-                        exit_code = 1
-                        should_continue_to_wp2 = False
-                else:
-                    log.info(f"==== lift down after {wp1_name} skipped by config ====")
-
-                if should_continue_to_wp2:
-                    time.sleep(0.2)
-
-                    log.info(f"==== executing segment 2: current -> {wp2_name} ====")
-                    left_traj_2, right_traj_2, _ = plan_one_waypoint(wp2_name, wp2_pose)
-                    result = client.execute_both(left_traj_2, right_traj_2, timeout_sec=TIMEOUT_SEC)
-                    log.info(f"{wp2_name} result: {result}")
-                    log.info(
-                        f"Left:  result={result.left.result.value}, "
-                        f"status={result.left.status}, message={result.left.message}"
-                    )
-                    log.info(
-                        f"Right: result={result.right.result.value}, "
-                        f"status={result.right.status}, message={result.right.message}"
-                    )
-
-                    if not result.both_succeeded:
-                        log.error(f"{wp2_name} execution failed")
-                        if MOVE_LIFT_HOME_AFTER_WP2:
-                            log.info("returning lift to home as cleanup")
-                            lift.move_to(LIFT_HOME)
-                        else:
-                            log.info("lift home cleanup skipped by config")
-                        exit_code = 1
-                    else:
-                        log.info(f"{wp2_name} reached; waiting {LIFT_WAIT_AFTER_WP2_SEC:.1f}s")
-                        time.sleep(LIFT_WAIT_AFTER_WP2_SEC)
-
-                        if MOVE_LIFT_HOME_AFTER_WP2:
-                            log.info(
-                                f"==== lift home after {wp2_name}: {LIFT_HOME:.3f} "
-                                f"over {LIFT_MOVE_DURATION_SEC:.1f}s ===="
-                            )
-                            if not lift.move_to(LIFT_HOME):
-                                log.error("lift home failed after wp2")
-                                exit_code = 1
-                            else:
-                                exit_code = 0
-                        else:
-                            log.info(f"==== lift home after {wp2_name} skipped by config ====")
-                            exit_code = 0
-
-        if return_home:
-            log.info("==== return-home requested ====")
-            left_home, right_home = client.build_home_trajectories(
-                duration_sec=3.0,
-                points=max(10, POINTS_PER_SEGMENT),
-            )
-            result = client.execute_both(left_home, right_home, timeout_sec=TIMEOUT_SEC)
-            log.info(f"return-home result: {result}")
-
-        time.sleep(0.5)
-        print_joint_summary(node, client, "Robot state after test_dual_box")
+        client.log_joint_summary("Robot state after test_dual_pick")
+        return 0
 
     except Exception as exc:
-        log.error(f"test_dual_box failed: {exc}")
-        log.error(traceback.format_exc())
-        exit_code = 1
+        log.error(f"test_dual_pick failed: {exc}")
+        return 1
+
     finally:
+        if box_collision_enabled:
+            try:
+                remove_zone_b_box_collision(client)
+                time.sleep(PLANNING_SCENE_SETTLE_SEC)
+            except Exception as exc:
+                log.warn(f"[scene] failed to remove zone_b_box during cleanup: {exc}")
         client.destroy()
         node.destroy_node()
         rclpy.shutdown()
 
-    sys.exit(exit_code)
+
+def main(args=None) -> None:
+    ns, ros_args = parse_args(args=args)
+    sys.exit(run(ns, ros_args))
 
 
 if __name__ == "__main__":

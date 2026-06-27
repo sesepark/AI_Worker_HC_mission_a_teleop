@@ -5,8 +5,8 @@ import time
 import rclpy
 from rclpy.node import Node
 
-from ai_worker_manipulation.robot_interface.moveit_client import MoveItClient
-from ai_worker_manipulation.robot_interface.planning_scene_b import (
+from manipulation.robot_interface.moveit_client import MoveItClient
+from manipulation.robot_interface.planning_scene_b import (
     setup_zone_b,
     clear_all_objects,
     EnvironmentVisualizer,
@@ -31,10 +31,12 @@ def main(args=None):
         time.sleep(0.5)
 
         log.info("[test_zone_b] Zone B collision objects 등록 중...")
+        log.info("[test_zone_b] zone_b_box는 시각화만 하고 collision object로 등록하지 않음")
         setup_zone_b(client)
         time.sleep(0.5)
 
         viz = EnvironmentVisualizer(node)
+        viz.publish_zone("B")
 
         log.info("[test_zone_b] /competition_markers publish 시작")
         log.info("[test_zone_b] RViz에서 Add -> By topic -> /competition_markers -> MarkerArray 추가")

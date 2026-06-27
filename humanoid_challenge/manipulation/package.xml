@@ -13,6 +13,9 @@
   <depend>sensor_msgs</depend>
   <depend>trajectory_msgs</depend>
   <depend>moveit_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <!-- Mission B 박스 픽: odom 프레임 충돌객체 등록용 TF 조회 -->
+  <depend>tf2_ros</depend>
   <!-- Mission A 실 서버(T1): FSM 계약 인터페이스 + task_list 미러 -->
   <depend>mission_interfaces</depend>
   <exec_depend>mission</exec_depend>
