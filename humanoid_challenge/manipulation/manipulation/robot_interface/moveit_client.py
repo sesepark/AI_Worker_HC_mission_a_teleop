@@ -653,27 +653,54 @@ class MoveItClient:
         velocity: float = 0.1,
         acceleration: float = 0.1,
         timeout: float = 15.0,
+        cartesian_max_step: float = 0.01,
+        cartesian_fraction_threshold: float = 0.99,
     ) -> MoveResult:
-        """Straight-line Cartesian motion using the Pilz LIN planner."""
+        """Straight-line Cartesian motion via computeCartesianPath + direct controller execution.
+
+        Pilz LIN 대신 computeCartesianPath(단일 trajectory) + execute()(컨트롤러 직접 전송)를 사용.
+        MoveIt 2.12.4 plan_execution.cpp line 297 OOB crash (PR #3466 불완전 수정) 우회.
+        """
         self._guard()
         tol_pos, tol_ori = 0.001, 0.005
         self._log_pose('move_cartesian', arm, pose, velocity, acceleration, tol_pos, tol_ori)
 
+        _PLAN_TIMEOUT = 10.0
+
         with self._lock(arm):
             moveit2 = self._moveit(arm)
-            self._configure(moveit2, velocity, acceleration,
-                            pipeline='pilz_industrial_motion_planner', planner='LIN')
-            try:
-                moveit2.move_to_pose(
-                    pose=pose,
-                    tolerance_position=tol_pos,
-                    tolerance_orientation=tol_ori,
-                )
-                return self._wait(moveit2, 'move_cartesian', arm, timeout)
-            finally:
-                # Always restore so subsequent OMPL calls are not affected.
-                moveit2.pipeline_id = 'ompl'
-                moveit2.planner_id  = 'RRTConnect'
+            self._configure(moveit2, velocity, acceleration)
+
+            future = moveit2.plan_async(
+                pose=pose,
+                tolerance_position=tol_pos,
+                tolerance_orientation=tol_ori,
+                cartesian=True,
+                max_step=cartesian_max_step,
+            )
+            if future is None:
+                self._log.error(f'[move_cartesian] [{arm.value}] plan_async returned None')
+                return MoveResult.INVALID
+
+            deadline = time.time() + _PLAN_TIMEOUT
+            while not future.done():
+                if time.time() > deadline:
+                    self._log.error(f'[move_cartesian] [{arm.value}] cartesian planning timeout')
+                    return MoveResult.TIMEOUT
+                time.sleep(0.05)
+
+            joint_traj = moveit2.get_trajectory(
+                future,
+                cartesian=True,
+                cartesian_fraction_threshold=cartesian_fraction_threshold,
+            )
+            if joint_traj is None:
+                self._log.error(f'[move_cartesian] [{arm.value}] cartesian planning failed')
+                return MoveResult.INVALID
+
+            # 컨트롤러에 직접 전송 — TrajectoryExecutionManager를 거치지 않아 segfault 우회
+            moveit2.execute(joint_traj)
+            return self._wait(moveit2, 'move_cartesian', arm, timeout)
 
     # ------------------------------------------------------------------
     # Query methods

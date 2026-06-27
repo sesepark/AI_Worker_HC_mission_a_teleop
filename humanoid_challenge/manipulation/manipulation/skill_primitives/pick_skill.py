@@ -17,7 +17,7 @@ from manipulation.skill_primitives.grasp_skill import GraspSkill, GraspResult
 from manipulation.skill_primitives.planning_filter import PlanningFilter
 
 
-_APPROACH_HEIGHT = 0.10
+_APPROACH_HEIGHT = 0.05
 _LIFT_HOME       = 0.0
 
 
@@ -100,8 +100,8 @@ class PickSkill:
         hover.position.z  = grasp_pose.position.z + approach_height
         hover.orientation = grasp_pose.orientation
 
-        executed = self._gripper.close(side)
-        # executed = self._gripper.open_to(side, 0.5)
+        # executed = self._gripper.close(side)
+        executed = self._gripper.open_to(side, 0.5)
         self._gripper.wait_until_executed()
         self._gripper.wait_motion()
 
