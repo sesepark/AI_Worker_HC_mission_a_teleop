@@ -1,0 +1,8 @@
+mock_navigation_d:
+  ros__parameters:
+    travel_sec: 1.0
+    translation_tolerance_mm: 20.0
+    yaw_tolerance_deg: 5.0
+    actual_translation_scale: 1.0
+    actual_yaw_scale: 1.0
+    path_table_json: '{"d1_wheel_align_left": {"dx_mm": 0.0, "dy_mm": 180.0, "dyaw_deg": 0.0}, "wheel_align_to_tool_area": {"dx_mm": 0.0, "dy_mm": 520.0, "dyaw_deg": 0.0}, "start_to_tool_area": {"dx_mm": 0.0, "dy_mm": 700.0, "dyaw_deg": 0.0}, "tool_to_fixture": {"dx_mm": 0.0, "dy_mm": -700.0, "dyaw_deg": 0.0}, "fixture_to_tool_area": {"dx_mm": 0.0, "dy_mm": 700.0, "dyaw_deg": 0.0}, "d1_move_to_wheel_drop_space": {"dx_mm": 0.0, "dy_mm": 0.0, "dyaw_deg": -90.0}, "d1_return_from_wheel_drop_space": {"dx_mm": 0.0, "dy_mm": 0.0, "dyaw_deg": 90.0}, "d3_move_near_loose_bolt_front": {"dx_mm": 120.0, "dy_mm": 0.0, "dyaw_deg": 0.0}, "d3_move_near_loose_bolt_left": {"dx_mm": 90.0, "dy_mm": 120.0, "dyaw_deg": 0.0}, "d3_move_near_loose_bolt_right": {"dx_mm": 90.0, "dy_mm": -120.0, "dyaw_deg": 0.0}, "d3_move_to_bolt_drop_space": {"dx_mm": -250.0, "dy_mm": 220.0, "dyaw_deg": 0.0}, "return_to_start_pose": {"dx_mm": -120.0, "dy_mm": 0.0, "dyaw_deg": 0.0}}'

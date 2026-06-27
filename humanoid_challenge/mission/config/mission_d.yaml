@@ -1,0 +1,57 @@
+mission_d:
+  ros__parameters:
+    nav_service_name: move_base_relative
+    nav_service_wait_sec: 10.0
+    manipulation_action_name: /mission_d/manipulation
+
+    use_test_env: true
+    test_env_required: true
+    setup_environment_service_name: /mission_d/setup_environment
+    test_env_timeout_sec: 60.0
+
+    max_wheel_detection_attempts: 3
+    max_wheel_grasp_attempts: 3
+    max_bolt_grasp_attempts: 5
+    max_drill_grasp_attempts: 3
+    max_fastening_attempts: 3
+    max_loose_bolt_nav_failures: 3
+
+    timeout_init_sec: 60.0
+    timeout_perception_sec: 12.0
+    timeout_planning_sec: 8.0
+    timeout_navigation_sec: 35.0
+    timeout_wheel_grasp_sec: 30.0
+    timeout_wheel_manip_sec: 25.0
+    timeout_wheel_drop_move_sec: 20.0
+    timeout_wheel_release_sec: 8.0
+    timeout_bolt_grasp_sec: 25.0
+    timeout_failed_bolt_drop_sec: 20.0
+    timeout_drill_grasp_sec: 25.0
+    timeout_bolt_insert_sec: 30.0
+    timeout_verify_wheel_inserted_sec: 5.0
+    timeout_verify_bolt_inserted_sec: 12.0
+    timeout_verify_fastening_sec: 3.0
+    timeout_drill_fasten_sec: 30.0
+    timeout_drill_retry_return_sec: 25.0
+
+    wheel_drop_wait_sec: 30.0
+    failed_bolt_drop_wait_sec: 30.0
+    bolt_visible_hold_sec: 4.0
+    wait_for_bolt_reappear_sec: 30.0
+    manual_wait_sec: 5.0
+
+    nav_path_ids_json: >-
+      {
+        "d1_wheel_align_left": "d1_wheel_align_left",
+        "wheel_align_to_tool_area": "wheel_align_to_tool_area",
+        "start_to_tool_area": "start_to_tool_area",
+        "tool_to_fixture": "tool_to_fixture",
+        "fixture_to_tool_area": "fixture_to_tool_area",
+        "d1_move_to_wheel_drop_space": "d1_move_to_wheel_drop_space",
+        "d1_return_from_wheel_drop_space": "d1_return_from_wheel_drop_space",
+        "d3_move_near_loose_bolt_front": "d3_move_near_loose_bolt_front",
+        "d3_move_near_loose_bolt_left": "d3_move_near_loose_bolt_left",
+        "d3_move_near_loose_bolt_right": "d3_move_near_loose_bolt_right",
+        "d3_move_to_bolt_drop_space": "d3_move_to_bolt_drop_space",
+        "return_to_start_pose": "return_to_start_pose"
+      }

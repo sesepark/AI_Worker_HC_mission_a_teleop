@@ -1,0 +1,13 @@
+mock_perception_d:
+  ros__parameters:
+    frame_id: base_link
+    confidence: 0.90
+    low_confidence: 0.20
+    plan_success: true
+    wheel_detection_confidence_threshold: 0.70
+    bolt_detection_confidence_threshold: 0.70
+    drill_detection_confidence_threshold: 0.70
+    bolt_visible_confidence_threshold: 0.80
+    bolt_center_tolerance_m: 0.03
+    loose_bolt_region: front
+    loose_bolt_reachable: true

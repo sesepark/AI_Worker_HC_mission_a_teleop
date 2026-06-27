@@ -1,0 +1,22 @@
+mission_d:
+  ros__parameters:
+    use_test_env: false
+    test_env_required: false
+    max_loose_bolt_nav_failures: 3
+
+    wheel_drop_wait_sec: 0.1
+    failed_bolt_drop_wait_sec: 0.1
+    bolt_visible_hold_sec: 0.1
+    wait_for_bolt_reappear_sec: 0.1
+    manual_wait_sec: 0.1
+
+    timeout_perception_sec: 2.0
+    timeout_planning_sec: 2.0
+    timeout_navigation_sec: 5.0
+    timeout_wheel_grasp_sec: 5.0
+    timeout_wheel_manip_sec: 5.0
+    timeout_bolt_grasp_sec: 5.0
+    timeout_drill_grasp_sec: 5.0
+    timeout_bolt_insert_sec: 5.0
+    timeout_drill_fasten_sec: 5.0
+    timeout_drill_retry_return_sec: 5.0
