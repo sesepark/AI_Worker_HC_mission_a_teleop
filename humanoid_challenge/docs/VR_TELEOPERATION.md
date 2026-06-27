@@ -7,7 +7,7 @@ Quest의 WebXR 화면에서 컨트롤러/핸드 트래킹 입력을 받아 ROS 2
 > 이 문서는 현재 브랜치의 실제 코드
 > ([robotis_vuer/launch/vr.launch.py](../../robotis_applications/robotis_vuer/launch/vr.launch.py),
 > [robotis_vuer/robotis_vuer/vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py))
-> 를 기준으로 작성되었습니다. 다른 브랜치(`feature/vr-head-tracking-leader-sg2` 등)에서는
+> 를 기준으로 작성되었습니다. 다른 브랜치에서는
 > launch 인자나 토픽이 다를 수 있으니 해당 브랜치의 코드를 직접 확인하세요.
 
 ---
@@ -73,27 +73,9 @@ hostname -I
 
 ### 2.3 런처 실행
 
-런처가 노출하는 인자는 **브랜치마다 다릅니다.** 두 가지로 나눠 정리합니다.
-
-#### (A) 현재 브랜치 (`feature/mission-a`)
-
-```bash
-ros2 launch robotis_vuer vr.launch.py model:=sg2
-```
-
-| launch 인자 | 기본값 | 설명 |
-|-------------|--------|------|
-| `model` | `sh5` | 실행할 모델: `hx5`, `sg2`, `sh5` 중 하나. 해당 executable만 조건부로 띄움 |
-
-> 이 브랜치의 `vr.launch.py`는 **`model` 인자 하나만** 선언합니다.
-> `view_only_mode`, `enable_vr_image`, `enable_vr_head_tracking`, `enable_leader_control` 등
-> head-tracking/leader 관련 인자는 **이 브랜치에는 없습니다.** 그 기능이 필요하면 (B)를 쓰세요.
-
-#### (B) head-tracking / leader 브랜치 (`feature/vr-head-tracking-leader-sg2`)
-
-이 브랜치의 `vr.launch.py`는 SG2 노드에 head-tracking·VR 영상·제어 모드 파라미터를 전달하는
-인자들을 추가로 노출합니다. (검증 출처: `origin/feature/vr-head-tracking-leader-sg2`의
-[robotis_vuer/launch/vr.launch.py] — launch 기본값과 노드 `declare_parameter` 기본값이 일치)
+현재 `integration/mission`의 `vr.launch.py`는 SG2 노드에 head-tracking·VR 영상·제어 모드
+파라미터를 전달하는 인자들을 노출합니다. launch 기본값은 노드 `declare_parameter` 기본값과
+일치합니다.
 
 아래 인자들은 모두 **`model:=sg2`일 때만** SG2 노드로 전달됩니다 (`sh5`/`hx5` 노드는 무시).
 
@@ -132,9 +114,9 @@ ros2 launch robotis_vuer vr.launch.py model:=sg2 \
 | `vr_head_joint1_min` / `vr_head_joint1_max` | `-0.20` / `0.50` | `head_joint1` 명령 하한/상한(보수적 안전 한계) |
 | `vr_head_joint2_min` / `vr_head_joint2_max` | `-0.28` / `0.28` | `head_joint2` 명령 하한/상한 |
 
-> `host` 인자는 **두 브랜치 모두 launch에 없습니다.** (Vuer 서버는 노드 내부에서 `host='0.0.0.0'` 고정)
+> `host` 인자는 launch에 없습니다. Vuer 서버는 노드 내부에서 `host='0.0.0.0'`로 고정합니다.
 
-#### 단계별 실행 (B 브랜치 기준)
+#### 단계별 실행
 
 - **Step 0 — VR 영상만 보기**: follower 스택을 먼저 띄운 뒤
   `view_only_mode:=true enable_vr_image:=true enable_vr_head_tracking:=false enable_leader_control:=false`.
@@ -177,14 +159,13 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 
 `vr_publisher_sg2` 노드는 Vuer를 HTTPS로 띄우기 위해 패키지 디렉터리의
 `cert.pem` / `key.pem`을 사용합니다
-([vr_publisher_sg2.py:101-115](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L101-L115)).
+([vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py)).
 
-- **자동 생성**: 인증서 파일이 없으면 노드가 시작 시 자기서명 인증서를 자동으로 생성합니다.
-  생성 시 다음 경고가 한 번 출력됩니다:
-  ```
-  TLS cert/key not found in <dir>; generating a self-signed pair for the VR HTTPS server
-  ```
-  (`cryptography` 패키지 필요 — 환경에 기본 설치되어 있음)
+- **컨테이너 자동 생성**: `robotis_applications/docker/container.sh start`는 인증서 파일이 없으면
+  호스트 IP를 감지해 컨테이너 안에서 `gen_cert.sh`를 실행합니다.
+- **직접 실행**: `ros2 launch robotis_vuer vr.launch.py ...`로 바로 실행하는 경우에는
+  `cert.pem`/`key.pem`이 패키지 디렉터리에 이미 있어야 합니다. 없으면 Docker 스크립트나
+  `robotis_applications/docker/gen_cert.sh`로 먼저 생성하세요.
 - 자기서명 인증서이므로 Quest 브라우저에서 보안 경고를 한 번 수동으로 통과해야 합니다.
 - 신뢰된 인증서를 쓰고 싶으면 직접 만든 `cert.pem`/`key.pem`을 패키지 디렉터리
   (`robotis_applications/robotis_vuer/robotis_vuer/`)에 넣으면 자동 생성을 건너뜁니다.
@@ -194,7 +175,7 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 ## 4. 발행/구독 토픽
 
 `vr_publisher_sg2` 노드 기준
-([vr_publisher_sg2.py:184-248](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L184-L248)).
+([vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py)).
 
 ### 4.1 발행 (Publishers)
 
@@ -238,14 +219,14 @@ https://<Main_PC_LAN_IP>:8012?ws=wss://<Main_PC_LAN_IP>:8012
 | **B 버튼 (양손 동시)** | `/reactivate` = `False` 발행 (rising edge) |
 
 - **모드 구분**: `joystick_mode = True` → `LIFT+HEAD`, `False` → `LIFT+CMD_VEL`
-  ([vr_publisher_sg2.py:407-408](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L407-L408)).
+  ([vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py)).
 - 컨트롤러 입력 로그는 `Controller data received | ... mode=LIFT+HEAD/LIFT+CMD_VEL` 형태로 주기 출력됩니다.
 
 ---
 
 ## 6. 주요 파라미터
 
-[vr_publisher_sg2.py:107-142](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py#L107-L142) 등에서 선언.
+[vr_publisher_sg2.py](../../robotis_applications/robotis_vuer/robotis_vuer/vr_publisher_sg2.py) 등에서 선언.
 
 | 파라미터 | 기본값 | 설명 |
 |----------|--------|------|
@@ -279,7 +260,7 @@ ros2 run robotis_vuer vr_publisher_sg2 --ros-args \
 
 | 증상 / 로그 | 원인 | 조치 |
 |-------------|------|------|
-| `Error in VR server thread: [Errno 2] No such file or directory` | `cert.pem`/`key.pem` 누락으로 Vuer HTTPS 서버 기동 실패 → Quest 접속 불가 | 인증서 자동 생성이 적용된 버전인지 확인(§3). 미적용이면 직접 인증서 배치 후 재빌드 |
+| `Error in VR server thread: [Errno 2] No such file or directory` | `cert.pem`/`key.pem` 누락으로 Vuer HTTPS 서버 기동 실패 → Quest 접속 불가 | `docker/container.sh start` 또는 `docker/gen_cert.sh`로 인증서를 만든 뒤 재빌드 |
 | `'Vuer' object has no attribute 'stop'` (종료 시 cleanup 에러) | vuer 0.1.6에는 `stop()` 메서드가 없음 | `hasattr` 가드가 적용된 버전으로 갱신(종료만의 문제로, 기능엔 영향 없음) |
 | Ctrl-C 시 `rcl_shutdown already called` | 종료 경로에서 `rclpy.shutdown()` 중복 호출 | 종료 시 발생하는 무해한 경고. 재실행에 영향 없음 |
 | Quest에서 접속이 안 됨 / `no active Vuer session` | 8012 포트·방화벽 문제, 또는 Quest 브라우저 미접속 | 같은 LAN 확인, `https://<IP>:8012` 직접 접속, 보안 경고 통과 |

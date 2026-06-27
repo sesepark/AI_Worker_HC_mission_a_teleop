@@ -40,6 +40,9 @@ Stop the container:
 ## Launch VR Publisher
 
 The `robotis_vuer` package provides one launch file with a `model` argument.
+When `model:=sg2`, the launch file also accepts SG2-specific safety, VR image,
+head-tracking, and Leader-mode arguments such as `view_only_mode`,
+`enable_vr_image`, `enable_vr_head_tracking`, and `enable_leader_control`.
 
 Run SH5: (default)
 

@@ -17,9 +17,12 @@
 # Authors: Wonho Yun, Hyunwoo Nam, Yeonguk Kim
 
 import asyncio
+import inspect
+import math
 import os
 import socket
 import threading
+import time
 
 from geometry_msgs.msg import Point, PoseStamped, Quaternion, Twist
 import nest_asyncio
@@ -28,11 +31,11 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation as R
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import CompressedImage, JointState
 from std_msgs.msg import Bool, Float32
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from vuer import Vuer
-from vuer.schemas import Body, MotionControllers, Scene
+from vuer.schemas import Body, ImageBackground, MotionControllers, Scene
 
 # Allow nested asyncio execution
 nest_asyncio.apply()
@@ -50,6 +53,11 @@ VR_HEAD_TO_ROS = np.array([
     [0.0, 0.0, -1.0],  # ROS Y = -head Z
     [-1.0, 0.0, 0.0],  # ROS Z = -head X
 ], dtype=np.float64)
+
+SG2_HEAD_JOINT1_URDF_MIN = -0.2317
+SG2_HEAD_JOINT1_URDF_MAX = 0.6951
+SG2_HEAD_JOINT2_URDF_MIN = -0.35
+SG2_HEAD_JOINT2_URDF_MAX = 0.35
 
 
 class VRTrajectoryPublisher(Node):
@@ -93,9 +101,115 @@ class VRTrajectoryPublisher(Node):
         self.declare_parameter('right_shoulder_offset_y', 0.0)
         self.declare_parameter('right_shoulder_offset_z', EYE_NECK_OFFSET_Z)
         self.declare_parameter('goal_pose_squeeze_threshold', 0.8)
+        self.declare_parameter('view_only_mode', True)
+        self.declare_parameter('enable_vr_head_tracking', False)
+        self.declare_parameter('enable_leader_control', False)
+        self.declare_parameter('enable_vr_robot_control', False)
+        self.declare_parameter('vr_head_tracking_hz', 10.0)
+        self.declare_parameter('vr_head_tracking_deadband_rad', 0.01)
+        self.declare_parameter('vr_head_tracking_smoothing_alpha', 0.25)
+        self.declare_parameter('vr_head_tracking_max_delta_per_update', 0.03)
+        self.declare_parameter('vr_head_tracking_pitch_scale', 1.0)
+        self.declare_parameter('vr_head_tracking_yaw_scale', -1.0)
+        self.declare_parameter('vr_head_joint1_min', -0.20)
+        self.declare_parameter('vr_head_joint1_max', 0.50)
+        self.declare_parameter('vr_head_joint2_min', -0.28)
+        self.declare_parameter('vr_head_joint2_max', 0.28)
 
-        # VR publishing control flag
-        self.vr_publishing_enabled = True  # Default: disabled
+        # VR image in headset (stereo background from camera topics).
+        self.declare_parameter('enable_vr_image', False)
+        self.declare_parameter(
+            'vr_image_left_topic',
+            '/zed/zed_node/left/image_rect_color/compressed'
+        )
+        self.declare_parameter(
+            'vr_image_right_topic',
+            '/zed/zed_node/right/image_rect_color/compressed'
+        )
+        self.declare_parameter('vr_image_fps', 15.0)
+
+        self.view_only_mode = (
+            self.get_parameter('view_only_mode')
+            .get_parameter_value().bool_value
+        )
+        self.enable_vr_head_tracking = (
+            self.get_parameter('enable_vr_head_tracking')
+            .get_parameter_value().bool_value
+        )
+        self.enable_leader_control = (
+            self.get_parameter('enable_leader_control')
+            .get_parameter_value().bool_value
+        )
+        self.enable_vr_robot_control = (
+            self.get_parameter('enable_vr_robot_control')
+            .get_parameter_value().bool_value
+        )
+        self.enable_vr_image = (
+            self.get_parameter('enable_vr_image')
+            .get_parameter_value().bool_value
+        )
+        self.vr_image_left_topic = (
+            self.get_parameter('vr_image_left_topic')
+            .get_parameter_value().string_value
+        )
+        self.vr_image_right_topic = (
+            self.get_parameter('vr_image_right_topic')
+            .get_parameter_value().string_value
+        )
+        self.vr_image_fps = (
+            self.get_parameter('vr_image_fps')
+            .get_parameter_value().double_value
+        )
+        if not np.isfinite(self.vr_image_fps) or self.vr_image_fps <= 0.0:
+            self.get_logger().warn(
+                f'Invalid vr_image_fps={self.vr_image_fps}; fallback to 15.0'
+            )
+            self.vr_image_fps = 15.0
+        self.vr_head_tracking_hz = (
+            self.get_parameter('vr_head_tracking_hz')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_tracking_deadband_rad = (
+            self.get_parameter('vr_head_tracking_deadband_rad')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_tracking_smoothing_alpha = (
+            self.get_parameter('vr_head_tracking_smoothing_alpha')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_tracking_max_delta_per_update = (
+            self.get_parameter('vr_head_tracking_max_delta_per_update')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_tracking_pitch_scale = (
+            self.get_parameter('vr_head_tracking_pitch_scale')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_tracking_yaw_scale = (
+            self.get_parameter('vr_head_tracking_yaw_scale')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_joint1_min = (
+            self.get_parameter('vr_head_joint1_min')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_joint1_max = (
+            self.get_parameter('vr_head_joint1_max')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_joint2_min = (
+            self.get_parameter('vr_head_joint2_min')
+            .get_parameter_value().double_value
+        )
+        self.vr_head_joint2_max = (
+            self.get_parameter('vr_head_joint2_max')
+            .get_parameter_value().double_value
+        )
+        self._sanitize_head_tracking_params()
+
+        # Keep the existing SG2 VR behavior available; view_only_mode is the
+        # default safety gate that blocks robot command publishing.
+        self.vr_publishing_enabled = True
 
         # VR Server setup
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -195,6 +309,48 @@ class VRTrajectoryPublisher(Node):
             self.joint_states_callback,
             self.vr_stream_qos
         )
+
+        # VR camera background. This path is intentionally independent from
+        # robot command publishing so view_only_mode can still show video.
+        self.current_session = None
+        self.latest_left_bytes = None
+        self.latest_right_bytes = None
+        self.latest_left_format = 'jpeg'
+        self.latest_right_format = 'jpeg'
+        self.vr_image_rx_count = {'left': 0, 'right': 0}
+        self.vr_image_send_count = {'left': 0, 'right': 0}
+        self.vr_image_last_rx_bytes = {'left': 0, 'right': 0}
+        self.vr_image_last_rx_sec = {'left': None, 'right': None}
+        self.vr_image_last_send_sec = {'left': None, 'right': None}
+        self.vr_image_first_rx_logged = {'left': False, 'right': False}
+        self.vr_image_first_send_logged = {'left': False, 'right': False}
+        self.vr_image_diag_last_log_sec = {}
+        if self.enable_vr_image:
+            self.left_image_sub = self.create_subscription(
+                CompressedImage,
+                self.vr_image_left_topic,
+                self.left_image_callback,
+                self.vr_stream_qos,
+            )
+            self.right_image_sub = self.create_subscription(
+                CompressedImage,
+                self.vr_image_right_topic,
+                self.right_image_callback,
+                self.vr_stream_qos,
+            )
+            self.image_send_timer = self.create_timer(
+                1.0 / self.vr_image_fps,
+                self.send_latest_images,
+            )
+            self.get_logger().info(
+                f'VR image enabled: left={self.vr_image_left_topic}, '
+                f'right={self.vr_image_right_topic}, {self.vr_image_fps:.1f} fps'
+            )
+        else:
+            self.get_logger().info(
+                'VR image disabled. Launch with enable_vr_image:=true to show '
+                'camera images in the headset.'
+            )
 
         # VR data storage
         self.left_controller_matrix = None
@@ -382,6 +538,13 @@ class VRTrajectoryPublisher(Node):
         self.last_lift_command = None
         self.last_head_command = None
         self.last_cmd_vel_command = (0.0, 0.0, 0.0)
+        self.vr_head_tracking_min_period = 1.0 / self.vr_head_tracking_hz
+        self.vr_head_tracking_initial_rot = None
+        self.vr_head_tracking_center_joints = None
+        self.vr_head_tracking_last_command = None
+        self.vr_head_tracking_last_publish_sec = 0.0
+        self.vr_head_tracking_publish_count = 0
+        self.vr_head_tracking_diag_last_log_sec = {}
 
         # Low-pass filter settings
         self.low_pass_filter_alpha = 0.5
@@ -397,9 +560,49 @@ class VRTrajectoryPublisher(Node):
         self.start_vuer_server()
 
         self.get_logger().info('VR Trajectory Publisher node has been started')
+        if self.enable_vr_head_tracking:
+            self.get_logger().warn(
+                'VR head tracking is enabled: this node may publish only '
+                'head_joint1/head_joint2 to '
+                '/leader/joystick_controller_left/joint_trajectory.'
+            )
+        if self.enable_vr_robot_control and not self.view_only_mode:
+            self.get_logger().warn(
+                'Full SG2 VR robot control is enabled. VR controller inputs can '
+                'publish arm, gripper, lift, base, pose reference, squeeze, and '
+                'reactivate commands.'
+            )
+        elif self.view_only_mode:
+            self.get_logger().info(
+                'View-only mode is active: VR arm, gripper, lift, base, pose '
+                'reference, squeeze, and reactivate publishing are blocked.'
+            )
+        else:
+            self.get_logger().warn(
+                'View-only mode is disabled, but full VR robot control is still '
+                'blocked unless enable_vr_robot_control:=true.'
+            )
+        if self.enable_leader_control:
+            self.get_logger().info(
+                'Leader-control mode marker is enabled. This node does not start '
+                'or stop the Leader; run the Leader process separately.'
+            )
+        if self.enable_vr_head_tracking and self.enable_leader_control:
+            self.get_logger().warn(
+                'VR head tracking and Leader control are both enabled. Treat VR '
+                'as the head authority: do not move the Leader head joystick. '
+                'For strict arbitration, add an external topic mux/remap.'
+            )
         self.get_logger().info(
-            'VR publishing is DISABLED by default. '
-            'Send /vr_control/toggle message (True=enable, False=disable).'
+            f'VR head tracking config: enabled={self.enable_vr_head_tracking}, '
+            f'hz={self.vr_head_tracking_hz:.1f}, '
+            f'deadband={self.vr_head_tracking_deadband_rad:.4f} rad, '
+            f'alpha={self.vr_head_tracking_smoothing_alpha:.2f}, '
+            f'max_delta={self.vr_head_tracking_max_delta_per_update:.4f} rad, '
+            f'joint1_range=[{self.vr_head_joint1_min:.4f}, '
+            f'{self.vr_head_joint1_max:.4f}], '
+            f'joint2_range=[{self.vr_head_joint2_min:.4f}, '
+            f'{self.vr_head_joint2_max:.4f}]'
         )
         self.get_logger().info(
             f'Stick swap config: left_stick_swap_xy={self.left_stick_swap_xy}, '
@@ -448,8 +651,136 @@ class VRTrajectoryPublisher(Node):
         """Check if value is valid float (excluding NaN, inf)."""
         return isinstance(value, (int, float)) and np.isfinite(value)
 
+    def _sanitize_head_joint_limits(
+        self,
+        joint_name,
+        requested_min,
+        requested_max,
+        urdf_min,
+        urdf_max,
+        default_min,
+        default_max,
+    ):
+        """Clamp requested head joint limits to conservative SG2 URDF bounds."""
+        if (
+            not np.isfinite(requested_min) or
+            not np.isfinite(requested_max) or
+            requested_min >= requested_max
+        ):
+            self.get_logger().warn(
+                f'Invalid {joint_name} head tracking range '
+                f'[{requested_min}, {requested_max}]; fallback to '
+                f'[{default_min}, {default_max}]'
+            )
+            return default_min, default_max
+
+        safe_min = max(float(requested_min), float(urdf_min))
+        safe_max = min(float(requested_max), float(urdf_max))
+        if safe_min >= safe_max:
+            self.get_logger().warn(
+                f'{joint_name} head tracking range becomes invalid after URDF '
+                f'clamp; fallback to [{default_min}, {default_max}]'
+            )
+            return default_min, default_max
+        if safe_min != requested_min or safe_max != requested_max:
+            self.get_logger().warn(
+                f'{joint_name} head tracking range clamped to SG2 URDF-safe '
+                f'limits: requested=[{requested_min}, {requested_max}], '
+                f'used=[{safe_min}, {safe_max}]'
+            )
+        return safe_min, safe_max
+
+    def _sanitize_head_tracking_params(self):
+        """Normalize VR head tracking parameters before any robot command is sent."""
+        if not np.isfinite(self.vr_head_tracking_hz) or self.vr_head_tracking_hz <= 0.0:
+            self.get_logger().warn(
+                f'Invalid vr_head_tracking_hz={self.vr_head_tracking_hz}; '
+                'fallback to 10.0'
+            )
+            self.vr_head_tracking_hz = 10.0
+
+        if (
+            not np.isfinite(self.vr_head_tracking_deadband_rad) or
+            self.vr_head_tracking_deadband_rad < 0.0
+        ):
+            self.get_logger().warn(
+                'Invalid vr_head_tracking_deadband_rad='
+                f'{self.vr_head_tracking_deadband_rad}; fallback to 0.01'
+            )
+            self.vr_head_tracking_deadband_rad = 0.01
+
+        if not np.isfinite(self.vr_head_tracking_smoothing_alpha):
+            self.get_logger().warn(
+                'Invalid vr_head_tracking_smoothing_alpha='
+                f'{self.vr_head_tracking_smoothing_alpha}; fallback to 0.25'
+            )
+            self.vr_head_tracking_smoothing_alpha = 0.25
+        self.vr_head_tracking_smoothing_alpha = float(
+            np.clip(self.vr_head_tracking_smoothing_alpha, 0.0, 1.0)
+        )
+
+        if (
+            not np.isfinite(self.vr_head_tracking_max_delta_per_update) or
+            self.vr_head_tracking_max_delta_per_update <= 0.0
+        ):
+            self.get_logger().warn(
+                'Invalid vr_head_tracking_max_delta_per_update='
+                f'{self.vr_head_tracking_max_delta_per_update}; fallback to 0.03'
+            )
+            self.vr_head_tracking_max_delta_per_update = 0.03
+
+        if not np.isfinite(self.vr_head_tracking_pitch_scale):
+            self.get_logger().warn(
+                f'Invalid vr_head_tracking_pitch_scale='
+                f'{self.vr_head_tracking_pitch_scale}; fallback to 1.0'
+            )
+            self.vr_head_tracking_pitch_scale = 1.0
+        if not np.isfinite(self.vr_head_tracking_yaw_scale):
+            self.get_logger().warn(
+                f'Invalid vr_head_tracking_yaw_scale={self.vr_head_tracking_yaw_scale}; '
+                'fallback to -1.0'
+            )
+            self.vr_head_tracking_yaw_scale = -1.0
+
+        self.vr_head_joint1_min, self.vr_head_joint1_max = (
+            self._sanitize_head_joint_limits(
+                'head_joint1',
+                self.vr_head_joint1_min,
+                self.vr_head_joint1_max,
+                SG2_HEAD_JOINT1_URDF_MIN,
+                SG2_HEAD_JOINT1_URDF_MAX,
+                -0.20,
+                0.50,
+            )
+        )
+        self.vr_head_joint2_min, self.vr_head_joint2_max = (
+            self._sanitize_head_joint_limits(
+                'head_joint2',
+                self.vr_head_joint2_min,
+                self.vr_head_joint2_max,
+                SG2_HEAD_JOINT2_URDF_MIN,
+                SG2_HEAD_JOINT2_URDF_MAX,
+                -0.28,
+                0.28,
+            )
+        )
+
+    def _vr_robot_control_allowed(self):
+        """Return True only for explicitly enabled full VR robot teleoperation."""
+        return (
+            self.enable_vr_robot_control and
+            not self.view_only_mode and
+            self.vr_publishing_enabled
+        )
+
+    def _head_tracking_allowed(self):
+        """Return True when VR is allowed to publish only SG2 head trajectories."""
+        return self.enable_vr_head_tracking and self.vr_publishing_enabled
+
     def _publish_reactivate(self, enabled, reason=None, force_log=False):
         """Publish reactivate Bool message without blocking event callbacks."""
+        if not self._vr_robot_control_allowed():
+            return
         msg = Bool()
         msg.data = bool(enabled)
         self.reactivate_pub.publish(msg)
@@ -486,6 +817,452 @@ class VRTrajectoryPublisher(Node):
             * self.trigger_scales[side_key]
         )
         return float(np.clip(calibrated, 0.0, 1.0))
+
+    def _now_sec(self):
+        """Return monotonic time in seconds for diagnostics."""
+        return time.monotonic()
+
+    def _log_vr_image_diag(self, level, key, message, period_sec=5.0):
+        """Log VR image diagnostics with a simple per-key throttle."""
+        now_sec = self._now_sec()
+        last_sec = self.vr_image_diag_last_log_sec.get(key)
+        if last_sec is not None and (now_sec - last_sec) < period_sec:
+            return
+        self.vr_image_diag_last_log_sec[key] = now_sec
+
+        logger = self.get_logger()
+        if level == 'error':
+            logger.error(message)
+        elif level == 'warn':
+            logger.warn(message)
+        elif level == 'debug':
+            logger.debug(message)
+        else:
+            logger.info(message)
+
+    def _log_vr_head_tracking_diag(self, level, key, message, period_sec=2.0):
+        """Log VR head tracking diagnostics with per-key throttling."""
+        now_sec = self._now_sec()
+        last_sec = self.vr_head_tracking_diag_last_log_sec.get(key)
+        if last_sec is not None and (now_sec - last_sec) < period_sec:
+            return
+        self.vr_head_tracking_diag_last_log_sec[key] = now_sec
+
+        logger = self.get_logger()
+        if level == 'error':
+            logger.error(message)
+        elif level == 'warn':
+            logger.warn(message)
+        elif level == 'debug':
+            logger.debug(message)
+        else:
+            logger.info(message)
+
+    @staticmethod
+    def _limit_delta(target_value, previous_value, max_delta):
+        """Limit one command step to reduce jerk when the headset moves fast."""
+        delta = float(target_value) - float(previous_value)
+        if delta > max_delta:
+            return float(previous_value) + max_delta
+        if delta < -max_delta:
+            return float(previous_value) - max_delta
+        return float(target_value)
+
+    def _make_head_trajectory(self, head_joint1_position, head_joint2_position):
+        """Build a conservative SG2 head trajectory command."""
+        msg = JointTrajectory()
+        msg.header.stamp.sec = 0
+        msg.header.stamp.nanosec = 0
+        msg.header.frame_id = ''
+        msg.joint_names = ['head_joint1', 'head_joint2']
+
+        point = JointTrajectoryPoint()
+        point.positions = [float(head_joint1_position), float(head_joint2_position)]
+        point.velocities = [0.0, 0.0]
+        point.accelerations = [0.0, 0.0]
+        point.effort = []
+        point.time_from_start.sec = 0
+        point.time_from_start.nanosec = 200000000
+        msg.points.append(point)
+        return msg
+
+    def _publish_head_tracking_from_matrix(self, head_matrix):
+        """Publish head_joint1/2 from the relative Meta Quest head direction."""
+        if not self._head_tracking_allowed():
+            return
+
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        if (
+            self.vr_head_tracking_min_period > 0.0 and
+            (now_sec - self.vr_head_tracking_last_publish_sec) <
+            self.vr_head_tracking_min_period
+        ):
+            return
+
+        try:
+            head_matrix = np.asarray(head_matrix, dtype=np.float64)
+            if head_matrix.shape != (4, 4) or not np.all(np.isfinite(head_matrix)):
+                self._log_vr_head_tracking_diag(
+                    'warn',
+                    'invalid_head_matrix',
+                    'VR head tracking: invalid head matrix; command skipped.',
+                    period_sec=2.0,
+                )
+                return
+
+            head_rot_matrix = head_matrix[:3, :3]
+            if abs(float(np.linalg.det(head_rot_matrix))) < 1e-6:
+                self._log_vr_head_tracking_diag(
+                    'warn',
+                    'degenerate_head_matrix',
+                    'VR head tracking: degenerate head rotation matrix; command skipped.',
+                    period_sec=2.0,
+                )
+                return
+
+            current_rot = R.from_matrix(head_rot_matrix)
+            if self.vr_head_tracking_initial_rot is None:
+                if self.current_joint_states is None:
+                    self._log_vr_head_tracking_diag(
+                        'warn',
+                        'center_without_joint_states',
+                        'VR head tracking: /joint_states not received yet. '
+                        'Head command is blocked until current head joints are known.',
+                        period_sec=5.0,
+                    )
+                    return
+                center = (
+                    float(self.head_joint1_current_position),
+                    float(self.head_joint2_current_position),
+                )
+                raw_center = center
+                center = (
+                    float(np.clip(
+                        center[0], self.vr_head_joint1_min, self.vr_head_joint1_max
+                    )),
+                    float(np.clip(
+                        center[1], self.vr_head_joint2_min, self.vr_head_joint2_max
+                    )),
+                )
+                if center != raw_center:
+                    self.get_logger().warn(
+                        'VR head tracking center was outside configured safe range; '
+                        f'raw_center={raw_center}, used_center={center}'
+                    )
+                self.vr_head_tracking_initial_rot = current_rot
+                self.vr_head_tracking_center_joints = center
+                self.vr_head_tracking_last_command = center
+                self.get_logger().info(
+                    'VR head tracking calibrated: initial headset orientation saved; '
+                    f'center head joints={center}. Keep the headset facing the '
+                    'desired robot-forward direction when entering VR.'
+                )
+
+            relative_rot = self.vr_head_tracking_initial_rot.inv() * current_rot
+            forward = relative_rot.apply(np.array([0.0, 1.0, 0.0], dtype=np.float64))
+            raw_pitch = math.atan2(float(forward[0]), math.hypot(forward[1], forward[2]))
+            raw_yaw_right = math.atan2(float(forward[2]), float(forward[1]))
+
+            center_joint1, center_joint2 = self.vr_head_tracking_center_joints
+            if abs(raw_pitch) < self.vr_head_tracking_deadband_rad:
+                target_joint1 = center_joint1
+            else:
+                target_joint1 = (
+                    center_joint1 + raw_pitch * self.vr_head_tracking_pitch_scale
+                )
+            if abs(raw_yaw_right) < self.vr_head_tracking_deadband_rad:
+                target_joint2 = center_joint2
+            else:
+                target_joint2 = (
+                    center_joint2 + raw_yaw_right * self.vr_head_tracking_yaw_scale
+                )
+
+            clamped_joint1 = float(np.clip(
+                target_joint1, self.vr_head_joint1_min, self.vr_head_joint1_max
+            ))
+            clamped_joint2 = float(np.clip(
+                target_joint2, self.vr_head_joint2_min, self.vr_head_joint2_max
+            ))
+            if clamped_joint1 != target_joint1 or clamped_joint2 != target_joint2:
+                self._log_vr_head_tracking_diag(
+                    'warn',
+                    'head_command_clamped',
+                    'VR head tracking: command clamped to configured safe range. '
+                    f'raw_cmd=[{target_joint1:.4f}, {target_joint2:.4f}], '
+                    f'used=[{clamped_joint1:.4f}, {clamped_joint2:.4f}]',
+                    period_sec=2.0,
+                )
+
+            prev_joint1, prev_joint2 = self.vr_head_tracking_last_command
+            alpha = self.vr_head_tracking_smoothing_alpha
+            smooth_joint1 = prev_joint1 + alpha * (clamped_joint1 - prev_joint1)
+            smooth_joint2 = prev_joint2 + alpha * (clamped_joint2 - prev_joint2)
+            limited_joint1 = self._limit_delta(
+                smooth_joint1,
+                prev_joint1,
+                self.vr_head_tracking_max_delta_per_update,
+            )
+            limited_joint2 = self._limit_delta(
+                smooth_joint2,
+                prev_joint2,
+                self.vr_head_tracking_max_delta_per_update,
+            )
+
+            msg = self._make_head_trajectory(limited_joint1, limited_joint2)
+            self.head_joint_pub.publish(msg)
+            self.last_head_publish_sec = now_sec
+            self.last_head_command = (limited_joint1, limited_joint2)
+            self.vr_head_tracking_last_publish_sec = now_sec
+            self.vr_head_tracking_last_command = (limited_joint1, limited_joint2)
+            self.vr_head_tracking_publish_count += 1
+
+            self._log_vr_head_tracking_diag(
+                'info',
+                'head_tracking_publish_stats',
+                'VR head tracking command published: '
+                f'count={self.vr_head_tracking_publish_count}, '
+                f'raw_pitch={math.degrees(raw_pitch):+.1f} deg, '
+                f'raw_yaw_right={math.degrees(raw_yaw_right):+.1f} deg, '
+                f'cmd=[{limited_joint1:.4f}, {limited_joint2:.4f}] rad, '
+                f'center=[{center_joint1:.4f}, {center_joint2:.4f}] rad',
+                period_sec=2.0,
+            )
+
+        except Exception as e:
+            self._log_vr_head_tracking_diag(
+                'error',
+                'head_tracking_exception',
+                f'VR head tracking: failed to publish head command: '
+                f'{type(e).__name__}: {e}',
+                period_sec=1.0,
+            )
+
+    @staticmethod
+    def _compressed_image_format(msg):
+        """Infer ImageBackground format from sensor_msgs/CompressedImage.format."""
+        msg_format = str(getattr(msg, 'format', '') or '').lower()
+        if 'png' in msg_format:
+            return 'png'
+        if 'jpeg' in msg_format or 'jpg' in msg_format:
+            return 'jpeg'
+        return 'jpeg'
+
+    def _store_latest_image(self, side, msg):
+        """Store latest compressed image bytes and emit useful diagnostics."""
+        data = bytes(msg.data)
+        if not data:
+            self._log_vr_image_diag(
+                'warn',
+                f'{side}_empty_image',
+                f'VR image {side}: received empty CompressedImage '
+                f'from {self._image_topic_for_side(side)}',
+                period_sec=5.0,
+            )
+            return
+
+        image_format = self._compressed_image_format(msg)
+        if side == 'left':
+            self.latest_left_bytes = data
+            self.latest_left_format = image_format
+        else:
+            self.latest_right_bytes = data
+            self.latest_right_format = image_format
+
+        self.vr_image_rx_count[side] += 1
+        self.vr_image_last_rx_bytes[side] = len(data)
+        self.vr_image_last_rx_sec[side] = self._now_sec()
+
+        if not self.vr_image_first_rx_logged[side]:
+            self.vr_image_first_rx_logged[side] = True
+            self.get_logger().info(
+                f'VR image {side}: first frame received from '
+                f'{self._image_topic_for_side(side)} '
+                f'({len(data)} bytes, msg.format="{msg.format}", '
+                f'vuer_format={image_format})'
+            )
+
+        self._log_vr_image_diag(
+            'info',
+            f'{side}_rx_stats',
+            f'VR image {side}: receiving frames '
+            f'(count={self.vr_image_rx_count[side]}, '
+            f'latest_bytes={len(data)}, format={image_format})',
+            period_sec=5.0,
+        )
+
+        msg_format = str(getattr(msg, 'format', '') or '')
+        if (
+            msg_format and image_format == 'jpeg'
+            and 'jpeg' not in msg_format.lower()
+            and 'jpg' not in msg_format.lower()
+        ):
+            self._log_vr_image_diag(
+                'warn',
+                f'{side}_unknown_format',
+                f'VR image {side}: unknown compressed format "{msg_format}". '
+                'Sending it to Vuer as jpeg.',
+                period_sec=30.0,
+            )
+
+    def _image_topic_for_side(self, side):
+        return self.vr_image_left_topic if side == 'left' else self.vr_image_right_topic
+
+    def _vr_image_rx_summary(self):
+        parts = []
+        now_sec = self._now_sec()
+        for side in ('left', 'right'):
+            last_rx_sec = self.vr_image_last_rx_sec[side]
+            if last_rx_sec is None:
+                age_text = 'never'
+            else:
+                age_text = f'{now_sec - last_rx_sec:.1f}s ago'
+            parts.append(
+                f'{side}: count={self.vr_image_rx_count[side]}, '
+                f'latest_bytes={self.vr_image_last_rx_bytes[side]}, '
+                f'last_rx={age_text}'
+            )
+        return '; '.join(parts)
+
+    def _schedule_vr_image_update(self, img, side, key, layer, image_format):
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.update_vuer_background(
+                    img,
+                    key=key,
+                    layer=layer,
+                    side=side,
+                    image_format=image_format,
+                ),
+                self.loop,
+            )
+        except RuntimeError as e:
+            self._log_vr_image_diag(
+                'error',
+                f'{side}_schedule_failed',
+                f'VR image {side}: failed to schedule Vuer background update: {e}',
+                period_sec=2.0,
+            )
+
+    def left_image_callback(self, msg):
+        """Store latest left eye image for VR background."""
+        if not self.enable_vr_image:
+            return
+        self._store_latest_image('left', msg)
+
+    def right_image_callback(self, msg):
+        """Store latest right eye image for VR background."""
+        if not self.enable_vr_image:
+            return
+        self._store_latest_image('right', msg)
+
+    def send_latest_images(self):
+        """Send the latest stereo camera frames to Vuer at configured fps."""
+        if not self.enable_vr_image:
+            return
+        if not self.loop.is_running():
+            self._log_vr_image_diag(
+                'warn',
+                'event_loop_not_running',
+                'VR image: Vuer event loop is not running yet; camera frames '
+                'cannot be sent to the headset.',
+                period_sec=5.0,
+            )
+            return
+        if self.current_session is None:
+            self._log_vr_image_diag(
+                'warn',
+                'no_vuer_session',
+                'VR image: no active Vuer session yet. Open/connect the headset '
+                'browser to the Vuer page before expecting camera video. '
+                f'RX stats: {self._vr_image_rx_summary()}',
+                period_sec=5.0,
+            )
+            return
+
+        missing_sides = [
+            side for side in ('left', 'right')
+            if self.vr_image_rx_count[side] == 0
+        ]
+        if missing_sides:
+            missing_text = ', '.join(
+                f'{side}={self._image_topic_for_side(side)}'
+                for side in missing_sides
+            )
+            self._log_vr_image_diag(
+                'warn',
+                'missing_camera_side',
+                f'VR image: waiting for compressed camera frames on {missing_text}',
+                period_sec=5.0,
+            )
+
+        if self.latest_left_bytes is None and self.latest_right_bytes is None:
+            self._log_vr_image_diag(
+                'debug',
+                'no_fresh_camera_frames',
+                'VR image: no fresh camera frame available on this timer tick.',
+                period_sec=5.0,
+            )
+            return
+        if self.latest_left_bytes is not None:
+            img = self.latest_left_bytes
+            image_format = self.latest_left_format
+            self.latest_left_bytes = None
+            self._schedule_vr_image_update(
+                img, side='left', key='bg_left', layer=1, image_format=image_format
+            )
+        if self.latest_right_bytes is not None:
+            img = self.latest_right_bytes
+            image_format = self.latest_right_format
+            self.latest_right_bytes = None
+            self._schedule_vr_image_update(
+                img, side='right', key='bg_right', layer=2, image_format=image_format
+            )
+
+    async def update_vuer_background(self, img_bytes, key, layer, side, image_format):
+        """Update Vuer session background image (stereo: layer 1=left, 2=right)."""
+        try:
+            if self.current_session is None:
+                self._log_vr_image_diag(
+                    'warn',
+                    f'{side}_session_lost',
+                    f'VR image {side}: Vuer session disappeared before background update.',
+                    period_sec=5.0,
+                )
+                return
+            result = self.current_session.upsert(
+                ImageBackground(
+                    src=img_bytes,
+                    key=key,
+                    layers=layer,
+                    distanceToCamera=2.0,
+                    aspect=1.77,
+                    height=2.5,
+                    position=[0, 0, -2.0],
+                    format=image_format,
+                    interpolate=True,
+                ),
+                to='bgChildren',
+            )
+            if inspect.isawaitable(result):
+                await result
+            self.vr_image_send_count[side] += 1
+            self.vr_image_last_send_sec[side] = self._now_sec()
+            if not self.vr_image_first_send_logged[side]:
+                self.vr_image_first_send_logged[side] = True
+                self.get_logger().info(
+                    f'VR image {side}: first frame sent to Vuer '
+                    f'({len(img_bytes)} bytes, key={key}, layer={layer}, '
+                    f'format={image_format})'
+                )
+        except Exception as e:
+            self._log_vr_image_diag(
+                'error',
+                f'{side}_upsert_failed',
+                f'VR image {side}: failed to update Vuer background '
+                f'(key={key}, layer={layer}, format={image_format}, '
+                f'bytes={len(img_bytes)}): {type(e).__name__}: {e}',
+                period_sec=2.0,
+            )
 
     def joint_states_callback(self, msg):
         """Receive current joint states for incremental joystick control."""
@@ -591,7 +1368,7 @@ class VRTrajectoryPublisher(Node):
     def can_publish_goal_pose(self):
         """Safety gate for goal_pose topics."""
         return (
-            self.vr_publishing_enabled and
+            self._vr_robot_control_allowed() and
             self.left_squeeze_value >= self.goal_pose_squeeze_threshold and
             self.right_squeeze_value >= self.goal_pose_squeeze_threshold
         )
@@ -882,6 +1659,8 @@ class VRTrajectoryPublisher(Node):
 
     def process_thumbstick(self):
         """Process thumbstick input for mode switching and joystick control."""
+        if not self._vr_robot_control_allowed():
+            return
         try:
             left_thumbstick_pressed = False
             right_thumbstick_pressed = False
@@ -946,6 +1725,8 @@ class VRTrajectoryPublisher(Node):
 
     def publish_right_joystick(self, thumbstick_value):
         """Publish lift_joint target from right thumbstick."""
+        if not self._vr_robot_control_allowed():
+            return
         try:
             raw_thumbstick_value = float(thumbstick_value)
             # Only jog the lift when the stick is pushed to the edge.
@@ -993,6 +1774,8 @@ class VRTrajectoryPublisher(Node):
 
     def publish_left_joystick_from_thumbstick(self, thumbstick_value):
         """Publish head joints target from left thumbstick."""
+        if not self._vr_robot_control_allowed():
+            return
         try:
             deadzone_applied_x = self.apply_deadzone(float(thumbstick_value[0]))
             deadzone_applied_y = self.apply_deadzone(float(thumbstick_value[1]))
@@ -1039,6 +1822,8 @@ class VRTrajectoryPublisher(Node):
 
     def publish_cmd_vel_from_thumbstick(self, left_thumbstick_value, right_thumbstick_value):
         """Publish base cmd_vel from thumbstick values."""
+        if not self._vr_robot_control_allowed():
+            return
         try:
             if not self.vr_publishing_enabled:
                 return
@@ -1158,8 +1943,14 @@ class VRTrajectoryPublisher(Node):
     async def main_hand_tracking(self, session):
         """Run main controller/body tracking session."""
         try:
+            self.current_session = session
             fps = self.fps
             self.get_logger().info('Starting controller/body tracking session')
+            if self.enable_vr_image:
+                self.get_logger().info(
+                    'VR image: Vuer session is active; camera frames can now '
+                    'be sent to the headset.'
+                )
             session.set @ Scene(
                 Body(
                     fps=fps,
@@ -1181,7 +1972,19 @@ class VRTrajectoryPublisher(Node):
                     ),
                 ],
             )
-            self.get_logger().info('Controller and body tracking enabled')
+            if self.view_only_mode:
+                self.get_logger().info(
+                    'Controller/body tracking scene enabled in view-only mode; '
+                    'VR controller robot commands are blocked.'
+                )
+            else:
+                self.get_logger().info('Controller and body tracking enabled')
+            if self.enable_vr_head_tracking:
+                self.get_logger().info(
+                    'VR head tracking: waiting for BODY_MOVE head matrices from '
+                    'the headset. The first valid frame becomes the neutral '
+                    'head direction.'
+                )
             while True:
                 await asyncio.sleep(1/fps)
         except Exception as e:
@@ -1224,6 +2027,12 @@ class VRTrajectoryPublisher(Node):
             except np.linalg.LinAlgError:
                 return
 
+            self._publish_head_tracking_from_matrix(head_matrix)
+
+            if not self._vr_robot_control_allowed():
+                self.pending_body_pose_frame = False
+                return
+
             self.left_elbow_matrix = self.get_body_joint_matrix_from_flat(
                 body_array, BODY_LEFT_ELBOW_INDEX
             )
@@ -1245,7 +2054,7 @@ class VRTrajectoryPublisher(Node):
     async def on_controller_move(self, event, session):
         """Handle Meta Quest controller events (CONTROLLER_MOVE)."""
         try:
-            if not self.vr_publishing_enabled:
+            if not self._vr_robot_control_allowed():
                 return
             if not isinstance(event.value, dict):
                 return
@@ -1402,9 +2211,14 @@ class VRTrajectoryPublisher(Node):
 
     def __del__(self):
         try:
-            if hasattr(self, 'vuer'):
-                self.loop.run_until_complete(self.vuer.stop())
-            if hasattr(self, 'loop'):
+            if hasattr(self, 'vuer') and hasattr(self.vuer, 'stop'):
+                stop_result = self.vuer.stop()
+                if inspect.isawaitable(stop_result) and hasattr(self, 'loop'):
+                    if self.loop.is_running():
+                        asyncio.run_coroutine_threadsafe(stop_result, self.loop)
+                    else:
+                        self.loop.run_until_complete(stop_result)
+            if hasattr(self, 'loop') and not self.loop.is_running():
                 self.loop.close()
         except Exception as e:
             self.get_logger().error(f'Error in cleanup: {e}')
