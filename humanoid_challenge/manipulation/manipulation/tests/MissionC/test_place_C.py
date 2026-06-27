@@ -1,55 +1,28 @@
 """
-Mission C place 테스트.
-부품을 파이프 위에 순서대로 (pipe1 → pipe4) 삽입.
-
-파이프 배치 (4개 중앙 = y=0, 간격 150mm):
-  pipe1  pipe2  pipe3  pipe4
-  y=+0.225  y=+0.075  y=-0.075  y=-0.225
-  (왼팔)    (왼팔)     (오른팔)   (오른팔)
+Mission C place — Perception 연동 버전.
+토픽에서 파이프 좌표를 수신하여 부품 삽입.
 
 실행:
   ros2 run manipulation test_place_c
+  ros2 run manipulation test_place_c -- --gripper-open 0.3
 """
 
+import argparse
+import threading
+
 import rclpy
+from geometry_msgs.msg import Pose, PoseStamped
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
-from geometry_msgs.msg import Pose
 
-from manipulation.robot_interface.moveit_client import MoveItClient, Arm, MoveResult
 from manipulation.robot_interface.gripper_controller import GripperInterface
-from manipulation.robot_interface.planning_scene import setup_zone_c_table, remove_zone_c_table
-from manipulation.skill_primitives.mission_c_arm_selector import select_arm
-from manipulation.tests.MissionC.test_pick_C import CENTER_Y
+from manipulation.robot_interface.moveit_client import Arm, MoveItClient
+from manipulation.skill_primitives.place_skill import PlaceCSkill
 
-# ── 파이프 좌표 (base_link 기준, m) ──────────────────────────────────
-# TODO: 실물 계측 후 x, z 갱신
-PIPE_X     = 0.40   # 테이블까지의 거리
-PIPE_Z_TOP = 0.90   # 테이블 높이 + 파이프 높이(0.08m) + 여유
-
-# y 좌표: 도면 중심간 거리 63 / 172 / 179 / 185 / 72 (mm) 기준
-# 파이프 중심 위치(왼쪽 기준): 63 / 235 / 414 / 599mm
-# y=0 기준: 테이블 전체 폭 670mm의 절반(335mm), 로봇 좌측 = +y
-#   pipe1: (335 - 63)mm  = +0.272m
-#   pipe2: (335 - 235)mm = +0.100m
-#   pipe3: (414 - 335)mm = -0.079m
-#   pipe4: (599 - 335)mm = -0.264m
-PIPE_POSITIONS = {
-    'pipe1': (PIPE_X,  0.272, PIPE_Z_TOP),
-    'pipe2': (PIPE_X,  0.100, PIPE_Z_TOP),
-    'pipe3': (PIPE_X, -0.079, PIPE_Z_TOP),
-    'pipe4': (PIPE_X, -0.264, PIPE_Z_TOP),
-}
-
-APPROACH_HEIGHT = 0.10   # 파이프 위에서 하강 시작 높이 (m)
-PLACE_Y_OFFSET  = -0.045  # pick과 동일한 y 오프셋
-NAV_DISTANCE    =  0.30   # 이동 거리 가정값 (m)
-
-# 팔-파이프 가동 범위 제약
-_LEFT_PIPES  = {'pipe1', 'pipe2'}   # +y, 왼팔 전담
-_RIGHT_PIPES = {'pipe3', 'pipe4'}   # -y, 오른팔 전담
-# ─────────────────────────────────────────────────────────────────────
-
-_QUAT_TOPDOWN = (0.0, 0.0, 0.0, 1.0)   # top-down (identity)
+ARM                = Arm.RIGHT
+PLACE_Y_OFFSET     = -0.030   # 우로 3cm
+PERCEPTION_TOPIC   = '/perception/wrist/target_one_pose' # 추후 수정 예정
+PERCEPTION_TIMEOUT = 100.0
 
 
 def _make_pose(x: float, y: float, z: float) -> Pose:
@@ -57,76 +30,64 @@ def _make_pose(x: float, y: float, z: float) -> Pose:
     pose.position.x = x
     pose.position.y = y
     pose.position.z = z
-    pose.orientation.x, pose.orientation.y, \
-        pose.orientation.z, pose.orientation.w = _QUAT_TOPDOWN
+    pose.orientation.w = 1.0
     return pose
 
 
-def place_on_pipe(
-    pipe_name: str,
-    arm: Arm,
-    client: MoveItClient,
-    gripper: GripperInterface,
-    log,
-) -> bool:
-    nav_y_offset = 0.0
-    if arm == Arm.RIGHT and pipe_name in _LEFT_PIPES:
-        log.warn(f'[place_c] move left — 오른팔로 {pipe_name} 도달 불가')
-        # ↓ 여기서 navigation으로 왼쪽 30cm 이동
-        log.info(f'[place_c] 왼쪽으로 {NAV_DISTANCE*100:.0f}cm 이동 완료 — place 재시도')
-        nav_y_offset = -NAV_DISTANCE
-    elif arm == Arm.LEFT and pipe_name in _RIGHT_PIPES:
-        log.warn(f'[place_c] move right — 왼팔로 {pipe_name} 도달 불가')
-        # ↓ 여기서 navigation으로 오른쪽 30cm 이동
-        log.info(f'[place_c] 오른쪽으로 {NAV_DISTANCE*100:.0f}cm 이동 완료 — place 재시도')
-        nav_y_offset = +NAV_DISTANCE
+def _wait_for_pose(node: Node, log, timeout: float) -> Pose | None:
+    received: list[Pose] = []
+    event = threading.Event()
 
-    x, y, z = PIPE_POSITIONS[pipe_name]
-    ey = y + nav_y_offset + PLACE_Y_OFFSET
-    log.info(f'[place_c] {pipe_name} → arm={arm.value}  pos=({x:.3f}, {ey:.3f}, {z:.3f})')
+    def _cb(msg: PoseStamped) -> None:
+        if event.is_set():
+            return
+        p = msg.pose.position
+        log.info(f'[place_c] pipe 좌표 수신: ({p.x:.3f},{p.y:.3f},{p.z:.3f})')
+        received.append(_make_pose(p.x, p.y, p.z))
+        event.set()
 
-    hover  = _make_pose(x, ey, z + APPROACH_HEIGHT)
-    target = _make_pose(x, ey, z)
+    sub = node.create_subscription(
+        PoseStamped, PERCEPTION_TOPIC, _cb, 10,
+        callback_group=ReentrantCallbackGroup(),
+    )
 
-    # hover로 글로벌 이동
-    r = client.move_to_pose(hover, arm=arm, velocity=0.2, acceleration=0.2)
-    if r != MoveResult.SUCCEEDED:
-        log.error(f'[place_c] {pipe_name} hover 실패: {r.value}')
-        return False
+    log.info(f'[place_c] 좌표 대기 (최대 {timeout}s)')
+    ok = event.wait(timeout=timeout)
+    node.destroy_subscription(sub)
 
-    # 파이프 위로 Cartesian 하강
-    r = client.move_cartesian(target, arm=arm)
-    if r != MoveResult.SUCCEEDED:
-        log.warn(f'[place_c] {pipe_name} cartesian 하강 실패: {r.value}')
-        client.move_to_pose(hover, arm=arm)
-        return False
+    if not ok:
+        log.error('[place_c] 좌표 수신 타임아웃')
+        return None
+    return received[0]
 
-    # 그리퍼 열기 (부품 해제)
-    gripper.open_to(arm.value, 0.5)
-    gripper.wait_until_executed()
-    gripper.wait_motion()
-    log.info(f'[place_c] {pipe_name} 부품 해제 완료')
 
-    # hover로 복귀
-    client.move_cartesian(hover, arm=arm)
-    return True
+def _parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gripper-open', type=float, default=0.0, dest='gripper_open',
+                        metavar='AMOUNT', help='그리퍼 벌림 정도 (0.0=완전열림, 1.0=완전닫힘)')
+    return parser.parse_args()
 
 
 def main():
+    args = _parse_args()
+
     rclpy.init()
     node    = Node('test_place_c')
     log     = node.get_logger()
     client  = MoveItClient(node)
     gripper = GripperInterface(node)
+    place   = PlaceCSkill(node, client, gripper)
 
-    setup_zone_c_table(client)
+    pipe_pose = _wait_for_pose(node, log, PERCEPTION_TIMEOUT)
+    if pipe_pose is None:
+        node.destroy_node()
+        rclpy.shutdown()
+        return
 
-    pipe_name = 'pipe4'
-    arm = select_arm(CENTER_Y)
-    ok = place_on_pipe(pipe_name, arm, client, gripper, log)
-    log.info(f'[place_c] {pipe_name} 결과: {"OK" if ok else "FAIL"}')
+    pipe_pose.position.y += PLACE_Y_OFFSET
+    result = place.place(pipe_pose, arm=ARM, gripper_open_amount=args.gripper_open)
+    log.info(f'[place_c] 결과: {result.value}')
 
-    remove_zone_c_table(client)
     node.destroy_node()
     rclpy.shutdown()
 

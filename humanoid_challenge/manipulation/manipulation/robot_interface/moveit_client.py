@@ -665,7 +665,7 @@ class MoveItClient:
         tol_pos, tol_ori = 0.001, 0.005
         self._log_pose('move_cartesian', arm, pose, velocity, acceleration, tol_pos, tol_ori)
 
-        _PLAN_TIMEOUT = 10.0
+        _PLAN_TIMEOUT = 15.0
 
         with self._lock(arm):
             moveit2 = self._moveit(arm)

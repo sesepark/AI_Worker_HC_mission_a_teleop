@@ -9,6 +9,7 @@
 #   'wheel' : robot body at tray via wheels; arm to hover →
 #             lift joint descends to release_height → open → lift retreat
 
+import time
 from enum import Enum
 
 from geometry_msgs.msg import Pose
@@ -51,9 +52,11 @@ class PlaceSkill:
         lift_home: float = _LIFT_HOME,
         release_height: float = _RELEASE_HEIGHT,
         local_mode: str = 'hover',
+        gripper_open_amount: float = 0.0,
+        cartesian_max_step: float = 0.05,
     ) -> PlaceResult:
         side = arm.value
-        self._log.info(f'[PlaceSkill] [{side}] starting place — mode={local_mode!r}')
+        self._log.info(f'[PlaceSkill] [{side}] starting place — mode={local_mode!r}  gripper_open={gripper_open_amount}')
 
         selection = self._filter.select_pose(place_pose, arm=arm, approach_height=approach_height)
         if selection is None:
@@ -66,17 +69,20 @@ class PlaceSkill:
             return self._place_lift(
                 place_pose, arm, approach_height, lift_home,
                 selection.global_pipeline, selection.global_planner,
+                gripper_open_amount,
             )
 
         if local_mode == 'wheel':
             return self._place_wheel(
                 place_pose, arm, approach_height, lift_home, release_height,
                 selection.global_pipeline, selection.global_planner,
+                gripper_open_amount,
             )
 
         return self._place_hover(
             place_pose, arm, approach_height,
             selection.global_pipeline, selection.global_planner,
+            gripper_open_amount,
         )
 
     def _place_hover(
@@ -86,6 +92,7 @@ class PlaceSkill:
         approach_height: float,
         global_pipeline: str,
         global_planner: str,
+        gripper_open_amount: float = 0.0,
     ) -> PlaceResult:
         side = arm.value
 
@@ -108,7 +115,7 @@ class PlaceSkill:
             self._moveit.move_to_pose(hover, arm=arm)
             return PlaceResult.FAILURE
 
-        self._gripper.open(side)
+        self._gripper.open_to(side, gripper_open_amount)
 
         retract = self._moveit.move_cartesian(hover, arm=arm)
         if retract != MoveResult.SUCCEEDED:
@@ -125,6 +132,7 @@ class PlaceSkill:
         lift_home: float,
         global_pipeline: str,
         global_planner: str,
+        gripper_open_amount: float = 0.0,
     ) -> PlaceResult:
         side = arm.value
 
@@ -145,7 +153,7 @@ class PlaceSkill:
 
         self._moveit.move_lift(lift_home - approach_height)
 
-        self._gripper.open(side)
+        self._gripper.open_to(side, gripper_open_amount)
 
         self._moveit.move_lift(lift_home)
         self._log.info(f'[PlaceSkill] [{side}] place SUCCEEDED (lift)')
@@ -160,6 +168,7 @@ class PlaceSkill:
         release_height: float,
         global_pipeline: str,
         global_planner: str,
+        gripper_open_amount: float = 0.0,
     ) -> PlaceResult:
         side = arm.value
 
@@ -180,8 +189,54 @@ class PlaceSkill:
 
         self._moveit.move_lift(lift_home - release_height)
 
-        self._gripper.open(side)
+        self._gripper.open_to(side, gripper_open_amount)
 
         self._moveit.move_lift(lift_home)
         self._log.info(f'[PlaceSkill] [{side}] place SUCCEEDED (wheel)')
+        return PlaceResult.SUCCESS
+
+
+_PLACE_C_Z_OFFSET = 0.05   # 파이프 위 기본 오프셋 [m]
+_PLACE_C_SETTLE   = 3.0    # 이동 완료 후 대기 시간 [s]
+
+
+class PlaceCSkill:
+    """Mission C 전용 place — Cartesian 없이 move_to_pose 후 그리퍼 해제."""
+
+    def __init__(self, node, moveit: MoveItClient, gripper: GripperInterface):
+        self._log     = node.get_logger()
+        self._moveit  = moveit
+        self._gripper = gripper
+
+    def place(
+        self,
+        pipe_pose: Pose,
+        arm: Arm = Arm.RIGHT,
+        z_offset: float = _PLACE_C_Z_OFFSET,
+        gripper_open_amount: float = 0.0,
+    ) -> PlaceResult:
+        side = arm.value
+
+        target = Pose()
+        target.position.x = pipe_pose.position.x
+        target.position.y = pipe_pose.position.y
+        target.position.z = pipe_pose.position.z + z_offset
+        target.orientation = pipe_pose.orientation
+
+        p = target.position
+        self._log.info(
+            f'[PlaceCSkill] [{side}] move to ({p.x:.3f},{p.y:.3f},{p.z:.3f})'
+            f'  gripper_open={gripper_open_amount}'
+        )
+
+        result = self._moveit.move_to_pose(target, arm=arm, velocity=0.2, acceleration=0.2)
+        if result != MoveResult.SUCCEEDED:
+            self._log.error(f'[PlaceCSkill] [{side}] move failed: {result.value}')
+            return PlaceResult.FAILURE
+
+        self._log.info(f'[PlaceCSkill] [{side}] settle {_PLACE_C_SETTLE}s')
+        time.sleep(_PLACE_C_SETTLE)
+
+        self._gripper.open_to(side, gripper_open_amount)
+        self._log.info(f'[PlaceCSkill] [{side}] place SUCCEEDED')
         return PlaceResult.SUCCESS

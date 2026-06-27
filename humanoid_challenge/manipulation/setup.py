@@ -42,6 +42,7 @@ setup(
             'test_pick_with_perception_v2 = manipulation.tests.test_pick_with_perception_v2:main',
             'test_lift                   = manipulation.tests.test_lift:main',
             'test_compute_capture_pose  = manipulation.tests.test_compute_capture_pose:main',
+            'test_fk_then_ik           = manipulation.tests.test_fk_then_ik:main',
             'test_gripper              = manipulation.tests.test_gripper:main',
             # Mission C peg/zone-c (mission-c 이식)
             'test_zone_c = manipulation.tests.test_zone_c:main',
@@ -62,6 +63,7 @@ setup(
             'test_pick_c            = manipulation.tests.MissionC.test_pick_C:main',
             'test_capture_to_pick_c = manipulation.tests.MissionC.test_capture_to_pick_C:main',
             'test_place_c           = manipulation.tests.MissionC.test_place_C:main',
+            'test_place_c_manual    = manipulation.tests.MissionC.test_place_C_manual:main',
             'test_base_c            = manipulation.tests.MissionC.test_base_C:main',
             'test_place_slots  = manipulation.tests.test_place_slots:main',
             'test_zone_clear   = manipulation.tests.test_zone_clear:main',
