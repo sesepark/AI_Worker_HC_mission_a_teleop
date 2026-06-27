@@ -1,0 +1,25 @@
+# 로컬 VLM(Qwen2.5-VL) Mission C OCR — vLLM 서버 의존성.
+# ⚠️ 이 PC(GPU 없음)가 아니라 CUDA GPU 머신에서 설치/실행한다.
+#
+#   python3 -m venv qwen_vllm_venv
+#   source qwen_vllm_venv/bin/activate
+#   pip install -U pip
+#   pip install -r requirements-qwen-vllm.txt
+#
+# vLLM 은 설치 시 호환되는 torch/CUDA 휠을 함께 끌어온다(별도 torch 핀 불필요).
+# Qwen2.5-VL 지원은 vLLM 0.7.2+ / transformers 4.49+ 부터 안정적이다.
+
+vllm>=0.7.2
+transformers>=4.49.0
+qwen-vl-utils>=0.0.8
+# 비전 입력 전처리/이미지 디코딩
+pillow>=10.0.0
+# guided_json(구조화 출력) 백엔드. vLLM 이 기본 의존성으로 가져오지만 명시해 둔다.
+xgrammar>=0.1.11
+
+# --- 클라이언트(이 PC 에서도 동작하는 비교 스크립트) 측 ---
+# qwen_mission_c_ocr.py / compare_mission_c_ocr.py 는 표준 라이브러리(urllib)만으로
+# vLLM/게이트웨이를 호출한다. PPM/BMP 프레임을 PNG 로 변환할 때만 opencv 가 필요.
+opencv-python>=4.8.0
+# HTTPS(게이트웨이) 호출 시 CA 번들. vLLM(http localhost)만 쓰면 불필요.
+certifi
