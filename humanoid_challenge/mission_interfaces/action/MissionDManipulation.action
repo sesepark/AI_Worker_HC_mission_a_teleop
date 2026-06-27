@@ -1,0 +1,19 @@
+# Mission D 조작 skill 요청.
+# System FSM은 어떤 skill을 언제 실행할지만 결정하고, 실제 궤적 생성과 힘 제어는 manipulation
+# 패키지 소유로 남겨 둔다. params_json은 mock 검증과 실험 중 파라미터 교체를 ROS interface 변경 없이
+# 진행하기 위한 확장 지점이다.
+string skill_id
+string hand
+geometry_msgs/PoseStamped primary_pose
+geometry_msgs/PoseStamped secondary_pose
+string params_json
+---
+# Result는 FSM이 retry/recovery 분기를 결정할 수 있을 만큼만 구조화한다.
+bool success
+string result_code
+string message
+string result_json
+---
+# 긴 조작 skill에서도 상태 토픽이 멈춘 것처럼 보이지 않도록 진행 단계와 비율을 전달한다.
+string phase
+float32 progress

@@ -1,0 +1,15 @@
+# Mission D runtime에서 System은 semantic path_id와 timeout을 navigation에 전달한다.
+# dx/dy/dyaw는 선택적 override/fallback 필드이며, 기본 Mission D 흐름에서는 navigation 쪽 config가
+# path_id를 실제 상대 이동량으로 해석한다.
+string path_id
+float64 dx_mm
+float64 dy_mm
+float64 dyaw_deg
+float64 timeout_sec
+---
+# navigation은 path_id 해석 결과 기준의 도착 여부와 실제 이동량 검증 결과를 함께 보고한다.
+bool arrived
+bool within_expected_range
+float64 actual_translation_mm
+float64 actual_yaw_deg
+string message

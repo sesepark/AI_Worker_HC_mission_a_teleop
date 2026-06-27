@@ -3,6 +3,7 @@ project(mission_interfaces)
 
 find_package(ament_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
@@ -12,8 +13,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetTaskList.srv"
   "srv/GetTrayDetections.srv"
   "srv/MoveBaseLateral.srv"
+  "srv/MoveBaseRelative.srv"
   "action/MoveToScanPose.action"
-  DEPENDENCIES std_msgs action_msgs
+  "action/MissionDManipulation.action"
+  DEPENDENCIES std_msgs geometry_msgs action_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)
