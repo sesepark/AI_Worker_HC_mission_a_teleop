@@ -69,21 +69,22 @@ _ZA_TABLE_D    = _ZA['table']['depth']
 _ZA_TABLE_H    = _ZA['table']['height']
 _ZA_TABLE_TOP  = _ZA['table']['top_thickness']
 _ZA_TABLE_CX   = _ZA['table']['center_x']
+_ZA_TABLE_CY   = _ZA['table'].get('center_y', 0.0)
 _ZA_TABLE_SURF = _ZA_TABLE_H
 
 ZONE_A_TABLE_TOP_ID       = "zone_a_table_top"
 ZONE_A_TABLE_TOP_SIZE     = (_ZA_TABLE_D, _ZA_TABLE_W, _ZA_TABLE_TOP)
-ZONE_A_TABLE_TOP_POSITION = (_ZA_TABLE_CX, 0.0, _ZA_TABLE_H - _ZA_TABLE_TOP / 2.0)
+ZONE_A_TABLE_TOP_POSITION = (_ZA_TABLE_CX, _ZA_TABLE_CY, _ZA_TABLE_H - _ZA_TABLE_TOP / 2.0)
 
 _ZA_LEG_SZ = _ZA['table']['leg_size']
 _ZA_LEG_IN = _ZA['table']['leg_inset']
 _ZA_LEG_H  = _ZA_TABLE_H - _ZA_TABLE_TOP
 ZONE_A_TABLE_LEG_SIZE      = (_ZA_LEG_SZ, _ZA_LEG_SZ, _ZA_LEG_H)
 ZONE_A_TABLE_LEG_POSITIONS = [
-    (_ZA_TABLE_CX - (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), +(_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
-    (_ZA_TABLE_CX - (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), -(_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
-    (_ZA_TABLE_CX + (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), +(_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
-    (_ZA_TABLE_CX + (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), -(_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
+    (_ZA_TABLE_CX - (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), _ZA_TABLE_CY + (_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
+    (_ZA_TABLE_CX - (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), _ZA_TABLE_CY - (_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
+    (_ZA_TABLE_CX + (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), _ZA_TABLE_CY + (_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
+    (_ZA_TABLE_CX + (_ZA_TABLE_D / 2.0 - _ZA_LEG_IN), _ZA_TABLE_CY - (_ZA_TABLE_W / 2.0 - _ZA_LEG_IN), _ZA_LEG_H / 2.0),
 ]
 
 # ── 노란 공구함 멀티피스 (W760×D480×H200, 벽두께 10mm) ──

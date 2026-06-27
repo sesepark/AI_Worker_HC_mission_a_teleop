@@ -29,11 +29,11 @@ _log = logging.getLogger(__name__)
 
 # ── 위치 기반 상수 ────────────────────────────────────────────────────
 X_FAR_THRESHOLD = 0.40     # m — 3열 경계
-Y_RIGHT_WALL    = -0.40    # m — 우벽 경계 (실측 후 수정)
-Y_LEFT_WALL     =  0.05    # m — 좌벽 경계 (실측 후 수정)
+Y_RIGHT_WALL    = -0.44    # m — 우벽 경계 (실측 후 수정)
+Y_LEFT_WALL     =  0.18    # m — 좌벽 경계 (실측 후 수정)
 
 # standard approach (yaw0) 오프셋
-GRASP_STD_X_OFFSET = -0.004   # m — x 미세 조정 (실측 후 수정, 예: -0.043)
+GRASP_STD_X_OFFSET = -0.005   # m — x 미세 조정 (실측 후 수정, 예: -0.043)
 GRASP_STD_Y_OFFSET = 0.038   # m — y 좌/우 회피 (실측 후 수정, 예: 0.043 / 0.045)
 
 # yaw90 approach 오프셋

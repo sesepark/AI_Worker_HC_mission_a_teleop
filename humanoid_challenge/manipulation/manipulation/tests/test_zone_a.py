@@ -47,7 +47,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        log.info('[test_zone_a] 종료')
+        log.info('[test_zone_a] 종료 — collision objects 제거 중')
+        clear_all_objects(client)
         node.destroy_node()
         rclpy.shutdown()
 

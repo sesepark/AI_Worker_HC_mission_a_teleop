@@ -23,7 +23,7 @@ from manipulation.skill_primitives.two_stage_capture import TwoStageCapture
 ARM = Arm.RIGHT
 
 CAPTURE_JOINTS     = [-2.707296, -0.299926, 2.883739, -2.112988, -1.433787, 0.369488, 0.659124]
-CAPTURE_Z          = 1.170
+CAPTURE_Z          = 1.050
 CAPTURE_SETTLE     = 2.0
 PERCEPTION_TIMEOUT = 100.0
 CARRY_Z            = 1.150
@@ -52,7 +52,7 @@ def main():
     pick    = PickSkill(node, client, gripper, grasp, pfilter)
 
     log.info('[perception_pick_v2] Scene 초기화')
-    clear_all_objects(client)
+    # clear_all_objects(client)
     # setup_zone_a는 pick 직전에 호출 — scan 자세에서 arm link가 yellow box wall을
     # 통과하므로, 미리 추가하면 start state invalid로 이후 planning이 전부 fail함.
 
@@ -90,7 +90,7 @@ def main():
     else:
         log.warning('[perception_pick_v2] pick 실패 — carry 상승 스킵')
 
-    clear_all_objects(client)
+    # clear_all_objects(client)
     node.destroy_node()
     rclpy.shutdown()
 

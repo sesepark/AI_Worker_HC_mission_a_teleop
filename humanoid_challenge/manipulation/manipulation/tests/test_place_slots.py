@@ -23,13 +23,13 @@ from manipulation.skill_primitives.planning_filter import PlanningFilter
 from manipulation.skill_primitives.place_skill import PlaceSkill, PlaceResult
 
 # ── 중앙 좌표 (내일 실측 후 이 값만 수정) ────────────────────────────
-CENTER_X = 0.270
-CENTER_Y = -0.100
-CENTER_Z = 0.880
+CENTER_X = 0.370
+CENTER_Y = -0.130
+CENTER_Z = 1.000
 
 # 중앙 기준 오프셋 (보수적: tray 내측 여유 확보)
-DX = 0.050   # x 오프셋 (앞/뒤)
-DY = 0.080   # y 오프셋 (우/좌)
+DX = 0.012   # x 오프셋 (앞/뒤)
+DY = 0.008   # y 오프셋 (우/좌)
 
 PLACE_SLOTS = [
     (CENTER_X,      CENTER_Y,      CENTER_Z),   # 0: 중앙

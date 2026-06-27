@@ -63,6 +63,8 @@ setup(
             'test_capture_to_pick_c = manipulation.tests.MissionC.test_capture_to_pick_C:main',
             'test_place_c           = manipulation.tests.MissionC.test_place_C:main',
             'test_base_c            = manipulation.tests.MissionC.test_base_C:main',
+            'test_place_slots  = manipulation.tests.test_place_slots:main',
+            'test_zone_clear   = manipulation.tests.test_zone_clear:main',
         ],
     },
 )
