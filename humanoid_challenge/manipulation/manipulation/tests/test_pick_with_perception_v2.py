@@ -27,7 +27,7 @@ from manipulation.skill_primitives.mission_a_grasp_adapter import build_mission_
 ARM = Arm.RIGHT
 
 CAPTURE_JOINTS  = [-0.845728, -1.145170, 1.013616, -1.996687, -2.846256, 0.801760, -1.580400]
-CAPTURE_Z       = 1.020   # detail capture pose 고정 z
+CAPTURE_Z       = 1.120   # detail capture pose 고정 z — CAPTURE_JOINTS FK z와 일치시켜야 IK 성공
 CAPTURE_SETTLE  = 2.0     # 각 pose 안정화 대기 (초)
 PERCEPTION_TIMEOUT = 100.0
 CARRY_Z = 1.150
@@ -90,12 +90,12 @@ def main():
     # ── 1. Scene 초기화 ───────────────────────────────────────────────
     log.info('[perception_pick_v2] Scene 초기화')
     clear_all_objects(client)
-    setup_zone_a(client)
+    # setup_zone_a는 pick 직전에 호출 — scan 자세에서 arm link가 yellow box wall을
+    # 통과하므로, 미리 추가하면 start state invalid로 이후 planning이 전부 fail함.
 
     # ── 2. 1차 capture pose 이동 (joint) ─────────────────────────────
     log.info(f'[perception_pick_v2] 1차 capture pose 이동: {[f"{v:.3f}" for v in CAPTURE_JOINTS]}')
-    r = client.move_to_joints(CAPTURE_JOINTS, arm=ARM, velocity=0.2, acceleration=0.2,
-                              pipeline='pilz_industrial_motion_planner', planner='PTP')
+    r = client.move_to_joints(CAPTURE_JOINTS, arm=ARM, velocity=0.2, acceleration=0.2)
     log.info(f'[perception_pick_v2] 1차 결과: {r.value}')
     if r.value != 'succeeded':
         log.error('[perception_pick_v2] 1차 capture pose 실패 — 종료')
@@ -107,6 +107,16 @@ def main():
     log.info(f'[perception_pick_v2] settle {CAPTURE_SETTLE}s 대기')
     time.sleep(CAPTURE_SETTLE)
 
+    # CAPTURE_JOINTS의 손목 orientation을 FK로 읽어둠.
+    # identity quat은 z=CAPTURE_Z에서 IK solution이 없으므로 반드시 재사용해야 함.
+    fk_pose = client.get_pose(arm=ARM)
+    if fk_pose is None:
+        log.error('[perception_pick_v2] capture pose FK 실패 — 종료')
+        clear_all_objects(client)
+        node.destroy_node()
+        rclpy.shutdown()
+        return
+
     # ── 3. 1차 스캔 (대략 좌표) ───────────────────────────────────────
     rough_pose = _wait_for_pose(node, log, '1차 스캔')
     if rough_pose is None:
@@ -115,12 +125,21 @@ def main():
         rclpy.shutdown()
         return
 
-    # ── 4. Detail capture pose 이동 (pose) ───────────────────────────
+    # ── 4. Detail capture pose 이동 (joints via IK) ───────────────────
+    # move_to_pose + OMPL은 CAPTURE_JOINTS seed에서 IK sampling이 즉시 실패함.
+    # solve_ik로 joint 값을 먼저 구한 뒤 move_to_joints로 이동 (Pilz PTP의 내부 동작과 동일).
     detail_capture = _make_pose(rough_pose.position.x, rough_pose.position.y, CAPTURE_Z)
+    detail_capture.orientation = fk_pose.orientation
     p = detail_capture.position
-    log.info(f'[perception_pick_v2] detail capture pose 이동: x={p.x:.3f} y={p.y:.3f} z={p.z:.3f}')
-    r = client.move_to_pose(detail_capture, arm=ARM, velocity=0.2, acceleration=0.2,
-                            pipeline='pilz_industrial_motion_planner', planner='PTP')
+    log.info(f'[perception_pick_v2] detail capture pose IK: x={p.x:.3f} y={p.y:.3f} z={p.z:.3f}')
+    detail_joints = client.solve_ik(detail_capture, arm=ARM)
+    if detail_joints is None:
+        log.error('[perception_pick_v2] detail capture IK 실패 — 종료')
+        clear_all_objects(client)
+        node.destroy_node()
+        rclpy.shutdown()
+        return
+    r = client.move_to_joints(detail_joints, arm=ARM, velocity=0.2, acceleration=0.2)
     log.info(f'[perception_pick_v2] detail capture 결과: {r.value}')
     if r.value != 'succeeded':
         log.error('[perception_pick_v2] detail capture pose 실패 — 종료')
@@ -141,6 +160,8 @@ def main():
         return
 
     # ── 6. Grasp pose 구성 → Pick ─────────────────────────────────────
+    # setup_zone_a(client)
+    time.sleep(0.5)   # collision objects가 MoveIt planning scene에 전파될 때까지 대기
     grasp_pose = build_mission_a_grasp_pose(center_pose)
     p = grasp_pose.position
     log.info(f'[perception_pick_v2] grasp pose=({p.x:.3f},{p.y:.3f},{p.z:.3f})')
@@ -150,8 +171,7 @@ def main():
 
     if result == PickResult.SUCCESS:
         carry = _make_pose(p.x, p.y, CARRY_Z)
-        r = client.move_to_pose(carry, arm=ARM, velocity=0.3, acceleration=0.3,
-                                pipeline='pilz_industrial_motion_planner', planner='PTP')
+        r = client.move_to_pose(carry, arm=ARM, velocity=0.3, acceleration=0.3)
         log.info(f'[perception_pick_v2] carry 상승(z={CARRY_Z}): {r.value}')
         log.info('[perception_pick_v2] navigation 대기 상태')
     else:

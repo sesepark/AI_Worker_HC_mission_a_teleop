@@ -55,7 +55,7 @@ def main():
 
     log.info('[test_pick] Scene 초기화')
     clear_all_objects(client)
-    setup_zone_a(client)
+    # setup_zone_a(client)
 
     center     = _make_pose(CENTER_X, CENTER_Y, CENTER_Z)
     grasp_pose = build_mission_a_grasp_pose(center)
