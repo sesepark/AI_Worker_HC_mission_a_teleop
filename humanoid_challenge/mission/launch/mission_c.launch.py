@@ -41,15 +41,19 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('insert_dry_run_grace_sec', default_value='2.0',
                               description='dry-run 해제 강제확정 grace(초)'),
         DeclareLaunchArgument('scan_pose_preset_id', default_value=''),
-        # 미션 C 베이스 시퀀스 + 카메라 미사용 모드(옵션, 기본 OFF=기존 동작)
+        # 미션 C 베이스 시퀀스(옵션, 기본 OFF=기존 동작)
         DeclareLaunchArgument('base_seq_enable', default_value='false',
-                              description='true=너트별 측방정렬+A/B(측방+전진) place 시퀀스'),
+                              description='true=너트 A/B 정렬 + pipe3 기준 place 시퀀스'),
+        DeclareLaunchArgument('use_monitor_ocr', default_value='true',
+                              description='false=OCR task_list 미사용, pick_positions 기반 수동 task_list 사용'),
         DeclareLaunchArgument('use_camera', default_value='true',
-                              description='false=perception 우회, pick/place 상수 주입(하드코딩)'),
+                              description='legacy. base_seq 너트 pick은 항상 perception/camera 사용'),
+        DeclareLaunchArgument('use_pipe_camera', default_value='false',
+                              description='false=manual pipe3 hardcoded place, true=perception pipe center place'),
         DeclareLaunchArgument('nut_pitch_mm', default_value='150.0',
-                              description='너트 간 측방 간격[mm]'),
+                              description='legacy. base_seq pick A/B 모드에서는 미사용'),
         DeclareLaunchArgument('place_forward_mm', default_value='100.0',
-                              description='place A/B 전진 거리[mm]'),
+                              description='legacy. 현재 base_seq place에서는 미사용'),
         DeclareLaunchArgument('pick_positions', default_value='',
                               description="픽 순서를 너트 위치(1~5,왼→오)로 지정 예:'4-5-3-1'. "
                                           '설정 시 pick_order 대체'),
@@ -84,7 +88,9 @@ def generate_launch_description() -> LaunchDescription:
             'insert_dry_run_grace_sec': lc('insert_dry_run_grace_sec'),
             'scan_pose_preset_id': lc('scan_pose_preset_id'),
             'base_seq_enable': lc('base_seq_enable'),
+            'use_monitor_ocr': lc('use_monitor_ocr'),
             'use_camera': lc('use_camera'),
+            'use_pipe_camera': lc('use_pipe_camera'),
             'nut_pitch_mm': lc('nut_pitch_mm'),
             'place_forward_mm': lc('place_forward_mm'),
             'pick_positions': lc('pick_positions'),
@@ -114,6 +120,7 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             'place_pose_invalid': lc('place_pose_invalid'),
             'parts_json': ParameterValue(lc('parts_json'), value_type=str),
+            'pub_task_list': lc('use_monitor_ocr'),
         }],
     )
 

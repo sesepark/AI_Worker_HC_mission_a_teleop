@@ -32,7 +32,8 @@ from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped, PoseArray
 
-from mission.task_list import TaskList, CLASS_TO_PART_NAME, part_name_to_class
+from mission.task_list import TaskList, CLASS_TO_PART_NAME
+from mission_interfaces.msg import TaskItem
 from mission_interfaces.srv import GetTaskList, MoveBaseLateral
 from mission_interfaces.action import MoveToScanPose
 from perception.msg import PartDetectionArray
@@ -52,6 +53,24 @@ TIMEOUT_PICK_PLACE = 45
 TIMEOUT_VERIFY     = 20
 
 MAX_RECOVERY_RETRY = 3
+
+# Mission C base-sequence layout (base frame origin = start pose, y = left +).
+BASE_POSITION_A_Y_MM = 0.0
+BASE_POSITION_B_Y_MM = 300.0
+NUT_POSITIONS_AT_A = {4, 5}
+NUT_POSITIONS_AT_B = {1, 2, 3}
+
+# Pipe gaps: pipe1-2, pipe2-3, pipe3-4 [mm].
+PIPE_GAPS_MM = (172.0, 179.0, 185.0)
+PIPE_REFERENCE_NO = 3
+
+# test_place_c_manual.py reference: at position A, this places on pipe3.
+MANUAL_PIPE3_X_M = 0.40
+MANUAL_PIPE3_Y_M = -0.335
+MANUAL_PIPE3_Z_M = 0.90
+
+# test_place_c.py applies a small rightward y offset to perception pipe centers.
+PIPE_CAMERA_PLACE_Y_OFFSET_M = -0.030
 
 
 def select_arm(y: float) -> str:
@@ -75,8 +94,8 @@ class State(Enum):
     C3_MOVE_TO_PEG  = auto()   # 베이스 측방 이동(MoveBaseLateral) — A3_MOVE_TO_TRAY 재사용
     C3_INSERT       = auto()   # peg 삽입(A3_PLACE 교체)
     C3_RETURN       = auto()   # 베이스 복귀(MoveBaseLateral) — A3_RETURN_TO_BOX 재사용
-    C_BSEQ_PICK_MOVE  = auto()  # (base_seq) 너트 k 측방 정렬 후 pick — pick 전 베이스 이동
-    C_BSEQ_PLACE_MOVE = auto()  # (base_seq) place A/B(측방+전진) 이동 후 insert
+    C_BSEQ_PICK_MOVE  = auto()  # (base_seq) 너트 A/B 정렬 후 pick
+    C_BSEQ_PLACE_MOVE = auto()  # (base_seq) pipe3 기준 gap 이동 후 insert
     VERIFY          = auto()
     DONE            = auto()
     RECOVERY        = auto()
@@ -129,6 +148,8 @@ class MissionC(Node):
             self.declare_parameter('task_list_topic', '/perception/task_list').value)
         self.use_task_list_service = bool(
             self.declare_parameter('use_task_list_service', False).value)
+        self.use_monitor_ocr = bool(
+            self.declare_parameter('use_monitor_ocr', True).value)
         self.verify_use_topic_remaining = bool(
             self.declare_parameter('verify_use_topic_remaining', False).value)
 
@@ -180,31 +201,39 @@ class MissionC(Node):
             self.get_logger().warn(f"arm_mode={self.arm_mode!r} 미지원 → 'right' 사용")
             self.arm_mode = 'right'
 
-        # --- 미션 C 베이스 시퀀스 + 카메라 미사용 모드 (옵션, 기본 OFF=기존 동작 유지) ---
-        # base_seq_enable=True 일 때만 너트별 측방 정렬 + A/B(측방+전진) place 시퀀스를 사용.
+        # --- 미션 C 베이스 시퀀스 (옵션, 기본 OFF=기존 동작 유지) ---
+        # base_seq_enable=True 일 때만 너트 A/B 정렬 + 파이프 기준 place 시퀀스를 사용.
         #   OFF 면 기존 C3_MOVE_TO_PEG/C3_RETURN(고정 측방 왕복) 경로 그대로.
         self.base_seq_enable = bool(
             self.declare_parameter('base_seq_enable', False).value)
-        # use_camera=False: perception 우회, pick/place 타깃을 상수로 주입(하드코딩 검증).
+        # Legacy parameter. Nut pick is always camera/perception in base_seq.
         self.use_camera = bool(self.declare_parameter('use_camera', True).value)
+        if not self.use_camera:
+            self.get_logger().warn(
+                '[base_seq] use_camera:=false 는 더 이상 pick에 적용되지 않습니다. '
+                '너트 파지는 항상 perception/camera target을 사용합니다.')
+        # false: pipe place target = test_place_c_manual.py hardcoded pipe3 pose.
+        # true: pipe place target = perception pipe center, like test_place_c.py.
+        self.use_pipe_camera = bool(
+            self.declare_parameter('use_pipe_camera', False).value)
+        # Legacy parameters kept for launch/backward compatibility; base_seq pick no longer
+        # uses per-nut pitch movement.
         self.nut_pitch_mm = float(self.declare_parameter('nut_pitch_mm', 150.0).value)
         self.place_forward_mm = float(
             self.declare_parameter('place_forward_mm', 100.0).value)
-        # A/B place 의 측방 정렬 기준 너트 번호(1-indexed): A=2번, B=4번 기준.
+        # Legacy no-op parameters kept so older launch overrides do not break startup.
         self.place_a_nut_index = int(self.declare_parameter('place_a_nut_index', 2).value)
         self.place_b_nut_index = int(self.declare_parameter('place_b_nut_index', 4).value)
-        # 앞쪽 place_split_count 개 파이프는 A, 나머지는 B (기획: 1·2=A, 3·4=B).
         self.place_split_count = int(self.declare_parameter('place_split_count', 2).value)
-        # 카메라 미사용 pick 상수(base_link, m): 모든 너트 공통(베이스가 정렬하므로 y=0).
+        # Legacy dry-test constants. Normal Mission C pick always uses perception.
         self.nocam_pick_x = float(self.declare_parameter('nocam_pick_x', 0.35).value)
         self.nocam_pick_z = float(self.declare_parameter('nocam_pick_z', 0.82).value)
-        # 카메라 미사용 place 상수(base_link, m): 너트별 y(오른쪽 +cm→ y음수). x/z 공통.
         self.nocam_place_x = float(self.declare_parameter('nocam_place_x', 0.50).value)
         self.nocam_place_z = float(self.declare_parameter('nocam_place_z', 0.90).value)
         self.nocam_place_ys = list(self.declare_parameter(
             'nocam_place_ys', [-0.10, -0.25, -0.10, -0.25]).value)
         # 공급대 슬롯(왼→오, 0~4) 별 너트 종류(class) 고정 배치 — 대회 실배치.
-        #   슬롯 index = 너트 위치(1~5)-1. pick 측방 위치 = -(슬롯)*nut_pitch_mm.
+        #   슬롯 index = 너트 위치(1~5)-1. 위치 1~3은 B, 4~5는 A에서 카메라로 pick.
         self.nut_slot_order = list(self.declare_parameter(
             'nut_slot_order',
             ['flange_nut', 'gear_ring', 'spacer_ring', 'hex_nut', 'dome_nut']).value)
@@ -286,6 +315,8 @@ class MissionC(Node):
         self.pub_active_mission = self.create_publisher(String, '/active_mission', 10)
         self.pub_attach_cmd = self.create_publisher(String, '/attach_cmd', 10)
         self.pub_detach_cmd = self.create_publisher(String, '/detach_cmd', 10)
+        self.pub_manual_task_list = self.create_publisher(
+            GetTaskList.Response, self.task_list_topic, 10)
         # C 신규: 선택된 peg 타깃·팔을 실 C manip 서버에 통지(서버 미구현 시 무해).
         self.pub_insert_target = self.create_publisher(
             PoseStamped, '/mission_c/insert_target', 10)
@@ -333,6 +364,7 @@ class MissionC(Node):
         self.current_pick_class: str | None = None
         self._task_list_service_inflight: bool = False
         self._task_list_service_next_try_time: float = 0.0
+        self._manual_task_list_msg: GetTaskList.Response | None = None
 
         self._scan = AsyncLatch()
         self._move_peg = AsyncLatch()
@@ -346,11 +378,15 @@ class MissionC(Node):
             self._sim = SimDriver(self, State)
 
         self.timer = self.create_timer(0.1, self._tick, callback_group=self._cbg)
+        self.manual_task_timer = self.create_timer(
+            1.0, self._publish_manual_task_list, callback_group=self._cbg)
         self.get_logger().info(
             f'mission_c started in state={self.state.name} '
             f'(sim_mode={self.sim_mode}, nav_mode={self.nav_mode}, arm_mode={self.arm_mode}, '
             f'base_shift_mm={self.base_shift_mm}, use_place_pose_check={self.use_place_pose_check}, '
             f'insert_dry_run={self.insert_dry_run}, '
+            f'base_seq_enable={self.base_seq_enable}, use_pipe_camera={self.use_pipe_camera}, '
+            f'use_monitor_ocr={self.use_monitor_ocr}, '
             f'pipe_centers_topic={self.pipe_centers_topic}, '
             f'GRASP_ASSESSMENT_ENABLED={GRASP_ASSESSMENT_ENABLED})')
 
@@ -410,6 +446,8 @@ class MissionC(Node):
         return (now - since) >= self.place_pose_valid_debounce_sec
 
     def _on_task_list(self, msg: GetTaskList.Response) -> None:
+        if not self.use_monitor_ocr:
+            return
         parts = [{'name': item.name, 'count': item.count} for item in msg.parts]
         self.last_task_list_response = msg
         self._last_topic_remaining = sum(
@@ -453,6 +491,53 @@ class MissionC(Node):
         self.get_logger().info(
             f'[C1_MONITOR] task_list service result: {self.task_list} '
             f'(frames={response.frames_used})')
+
+    def _build_manual_task_list_from_pick_order(self) -> bool:
+        """OCR 미사용 시 pick_order/pick_positions 기반 task_list를 생성한다."""
+        classes = [c for c in self.pick_order if c in self.nut_slot_order]
+        if not classes:
+            self.get_logger().error(
+                '[C1_MONITOR] use_monitor_ocr:=false 이지만 유효한 pick_order가 없습니다. '
+                '예: pick_positions:=3-5-1-2')
+            return False
+
+        counts: dict[str, int] = {}
+        for cls in classes:
+            counts[cls] = counts.get(cls, 0) + 1
+
+        parts = [
+            {'name': CLASS_TO_PART_NAME.get(cls, cls), 'count': count}
+            for cls, count in counts.items()
+        ]
+        self.task_list.build_from_ocr_parts(parts)
+        self._last_topic_remaining = self.task_list.total_remaining()
+
+        msg = GetTaskList.Response()
+        msg.success = True
+        msg.message = json.dumps({
+            'source': 'manual_pick_positions',
+            'pick_positions': self.pick_positions,
+            'pick_order': classes,
+            'use_monitor_ocr': False,
+        }, ensure_ascii=False)
+        msg.screen_detected = True
+        msg.all_counts_recognized = True
+        msg.frames_used = 0
+        msg.parts = [
+            TaskItem(name=str(part['name']), count=int(part['count']))
+            for part in parts
+        ]
+        self._manual_task_list_msg = msg
+        self._publish_manual_task_list()
+        self.get_logger().info(
+            f'[C1_MONITOR] manual task_list 생성: {self.task_list} '
+            f'(pick_order={classes})')
+        return True
+
+    def _publish_manual_task_list(self) -> None:
+        if self.use_monitor_ocr or self._manual_task_list_msg is None:
+            return
+        self.pub_manual_task_list.publish(self._manual_task_list_msg)
 
     # ----------------------------------------------------------------------- #
     # 외부 기능 호출 (scan Action / nav Service) — A 동일
@@ -573,7 +658,7 @@ class MissionC(Node):
         return 'arrived' if self._bseq_phase == 2 else 'pending'
 
     def _publish_nocam_pick(self) -> None:
-        """카메라 미사용 pick 상수(base_link)를 발행 — manip 서버·FSM 공용."""
+        """Legacy helper for old dry tests. Base-seq Mission C no longer calls this."""
         ps = PoseStamped()
         ps.header.frame_id = 'base_link'
         ps.header.stamp = self.get_clock().now().to_msg()
@@ -583,28 +668,22 @@ class MissionC(Node):
         ps.pose.orientation.w = 1.0
         self.pub_wrist_target.publish(ps)
 
-    def _set_nocam_place(self) -> None:
-        """현재 너트(bseq_index)의 place 상수(base_link)를 current_insert_pose 로 설정·통지."""
-        ys = self.nocam_place_ys
-        y = float(ys[self.bseq_index % len(ys)]) if ys else 0.0
-        ps = PoseStamped()
-        ps.header.frame_id = 'base_link'
-        ps.header.stamp = self.get_clock().now().to_msg()
-        ps.pose.position.x = self.nocam_place_x
-        ps.pose.position.y = y
-        ps.pose.position.z = self.nocam_place_z
-        ps.pose.orientation.w = 1.0
-        arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(y)
+    def _publish_insert_target_pose(self, ps: PoseStamped, arm: str, label: str) -> None:
+        """Publish the selected pipe target to the Mission C manipulation server."""
         self.current_insert_pose = ps
         self.current_insert_arm = arm
         self.pub_insert_target.publish(ps)
         self.pub_insert_arm.publish(String(data=arm))
+        p = ps.pose.position
+        self.get_logger().info(
+            f'[{label}] insert target -> arm={arm} '
+            f'pos=({p.x:.3f},{p.y:+.3f},{p.z:.3f})')
 
     def _build_pipe_nut_classes(self) -> None:
         """파이프 순서 너트 class 리스트 = pick_order(설정).
 
-        파이프 1,2,3,4 에 이 순서대로 너트를 집어 넣는다(베이스가 순서대로 슬롯으로 이동,
-        perception 에 해당 class 만 픽하도록 통지). 파이프 수 = len(pick_order).
+        파이프 1,2,3,4 에 이 순서대로 너트를 집어 넣는다(베이스는 너트 위치에 따라
+        A/B 로만 이동하고, perception 에 해당 class 만 픽하도록 통지). 파이프 수 = len(pick_order).
         nut_slot_order 에 없는 class 는 제외(슬롯 매핑 불가).
         """
         classes = [c for c in self.pick_order if c in self.nut_slot_order]
@@ -627,21 +706,78 @@ class MissionC(Node):
                 f'[base_seq] class {cls!r} 가 nut_slot_order 에 없음 → 순차 슬롯 폴백')
         return self.bseq_index
 
-    def _bseq_pick_target_y_mm(self) -> float:
-        """현재 파이프 너트의 측방 목표(mm, y=왼+). 종류→슬롯 매핑으로 결정."""
-        return -float(self._slot_of_current()) * self.nut_pitch_mm
+    def _current_nut_position(self) -> int:
+        """현재 pick class 의 공급대 위치(1~5, 왼→오)."""
+        return self._slot_of_current() + 1
 
-    def _bseq_place_target(self) -> tuple[float, float]:
-        """현재 파이프(bseq_index)의 place 베이스 목표 (x_mm, y_mm). A/B 측방만(전진 생략).
+    def _bseq_pick_target(self) -> tuple[float, str, int]:
+        """현재 너트의 pick 베이스 목표 y(mm)와 A/B 그룹."""
+        nut_pos = self._current_nut_position()
+        if nut_pos in NUT_POSITIONS_AT_B:
+            return BASE_POSITION_B_Y_MM, 'B', nut_pos
+        if nut_pos not in NUT_POSITIONS_AT_A:
+            self.get_logger().warn(
+                f'[base_seq] 알 수 없는 너트 위치 {nut_pos} -> 위치 A 사용')
+        return BASE_POSITION_A_Y_MM, 'A', nut_pos
 
-        요청: 너트 2/4(A/B) place 시 횡이동만 진행하고 종방향(전진) 이동은 하지 않는다.
-        x 목표를 현재 위치(base_x_mm)로 두어 _goto_base 의 전진 phase 가 무이동으로 통과한다.
-        place_forward_mm 파라미터는 보존하되 현재 미적용(전진 복원 시 self.place_forward_mm 사용).
-        """
-        nut_idx = (self.place_a_nut_index if self.bseq_index < self.place_split_count
-                   else self.place_b_nut_index)
-        y_mm = -float(nut_idx - 1) * self.nut_pitch_mm
-        return self.base_x_mm, y_mm
+    def _pipe_base_target_y_mm(self, pipe_no: int) -> float:
+        """pipe3 at A 기준으로 target pipe가 같은 arm pose에 오도록 하는 base y(mm)."""
+        if pipe_no < 1 or pipe_no > len(PIPE_GAPS_MM) + 1:
+            self.get_logger().warn(
+                f'[base_seq] pipe 번호 {pipe_no} 범위 밖 -> pipe{PIPE_REFERENCE_NO} 기준 사용')
+            return BASE_POSITION_A_Y_MM
+        if pipe_no == PIPE_REFERENCE_NO:
+            return BASE_POSITION_A_Y_MM
+        if pipe_no < PIPE_REFERENCE_NO:
+            gap = sum(PIPE_GAPS_MM[pipe_no - 1:PIPE_REFERENCE_NO - 1])
+            return BASE_POSITION_A_Y_MM + gap
+        gap = sum(PIPE_GAPS_MM[PIPE_REFERENCE_NO - 1:pipe_no - 1])
+        return BASE_POSITION_A_Y_MM - gap
+
+    def _bseq_place_target(self) -> tuple[float, float, int]:
+        """현재 파이프의 place 베이스 목표 (x_mm, y_mm, pipe_no)."""
+        pipe_no = self.bseq_index + 1
+        y_mm = self._pipe_base_target_y_mm(pipe_no)
+        return self.base_x_mm, y_mm, pipe_no
+
+    def _set_manual_pipe_place(self, pipe_no: int) -> bool:
+        """test_place_c_manual.py 와 같은 pipe3 기준 하드코딩 target을 발행."""
+        ps = PoseStamped()
+        ps.header.frame_id = 'base_link'
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.pose.position.x = MANUAL_PIPE3_X_M
+        ps.pose.position.y = MANUAL_PIPE3_Y_M
+        ps.pose.position.z = MANUAL_PIPE3_Z_M
+        ps.pose.orientation.w = 1.0
+        arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(MANUAL_PIPE3_Y_M)
+        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} manual')
+        return True
+
+    def _set_camera_pipe_place(self, pipe_no: int) -> bool:
+        """perception pipe center를 선택해 test_place_c.py 방식으로 target을 발행."""
+        centers = self.last_pipe_centers
+        idx = pipe_no - 1
+        if centers is None or idx < 0 or idx >= len(centers.poses):
+            self.get_logger().warn(
+                f'[C_BSEQ_PLACE_MOVE] pipe{pipe_no} perception 중심 대기({self.pipe_centers_topic})',
+                throttle_duration_sec=2.0)
+            return False
+        pose = centers.poses[idx]
+        ps = PoseStamped()
+        ps.header.frame_id = centers.header.frame_id or 'base_link'
+        ps.header.stamp = self.get_clock().now().to_msg()
+        ps.pose.position.x = pose.position.x
+        ps.pose.position.y = pose.position.y + PIPE_CAMERA_PLACE_Y_OFFSET_M
+        ps.pose.position.z = pose.position.z
+        ps.pose.orientation = pose.orientation
+        arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(ps.pose.position.y)
+        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} camera')
+        return True
+
+    def _prepare_bseq_place_target(self, pipe_no: int) -> bool:
+        if self.use_pipe_camera:
+            return self._set_camera_pipe_place(pipe_no)
+        return self._set_manual_pipe_place(pipe_no)
 
     # --- C 신규: peg 선택 + 삽입 타깃 통지 ---
     def _select_next_peg(self) -> bool:
@@ -718,18 +854,17 @@ class MissionC(Node):
             self._bseq_lat.reset()
             self._bseq_fwd.reset()
             if state == State.C_BSEQ_PICK_MOVE:
-                # 카메라 픽: 지금 집을 너트 class 만 픽하도록 perception 에 통지(조율+제외).
+                # 너트 pick은 항상 카메라/perception 사용: 이번 class만 픽하도록 통지.
                 cls = (self.pipe_nut_classes[self.bseq_index]
                        if self.bseq_index < len(self.pipe_nut_classes) else '')
-                if self.use_camera and cls:
+                if cls:
                     self.pub_pick_target_class.publish(String(data=cls))
                     self.get_logger().info(
                         f'[C_BSEQ_PICK_MOVE] perception 타깃 class 통지: {cls} '
                         f'(파이프{self.bseq_index + 1})')
             if state == State.C_BSEQ_PLACE_MOVE:
-                # place 타깃(arm pose) 통지. 현재는 nocam 상수(그리퍼 열기용).
-                #   TODO(perception pipe 중점): 추후 _select_next_peg(실 파이프 좌표)로 교체 가능.
-                self._set_nocam_place()
+                self.current_insert_pose = None
+                self.current_insert_arm = None
 
     # ----------------------------------------------------------------------- #
     # Per-state handlers
@@ -747,6 +882,13 @@ class MissionC(Node):
             self._transition(State.C1_MONITOR)
 
     def _run_c1_monitor(self) -> None:
+        if (self.base_seq_enable and not self.use_monitor_ocr
+                and self.task_list.is_empty()):
+            if not self._build_manual_task_list_from_pick_order():
+                if self._timed_out():
+                    self._transition(State.RECOVERY)
+                return
+
         if not self.task_list.is_empty():
             total = self.task_list.total_remaining()
             if total > 0:
@@ -764,7 +906,7 @@ class MissionC(Node):
                 self.get_logger().info('[C1_MONITOR] task_list 잔여 0 -> VERIFY')
                 self._transition(State.VERIFY)
             return
-        if self.use_task_list_service:
+        if self.use_monitor_ocr and self.use_task_list_service:
             self._request_task_list_service()
 
     def _run_c2_scan_pose(self) -> None:
@@ -800,9 +942,6 @@ class MissionC(Node):
             self._transition(State.RECOVERY)
 
     def _run_c2_scan(self) -> None:
-        # 카메라 미사용: pick 타깃 상수를 발행(자체 구독으로 last_target_pose 채워짐 + manip 공급).
-        if not self.use_camera and self.last_target_pose is None:
-            self._publish_nocam_pick()
         if self.last_target_pose is not None:
             frame = self.last_target_pose.header.frame_id
             if frame != 'base_link':
@@ -838,17 +977,15 @@ class MissionC(Node):
 
     # --- base_seq 전용 핸들러 (base_seq_enable=True 일 때만 진입) ---
     def _run_bseq_pick_move(self) -> None:
-        """너트 k 측방 정렬(전진 0, 측방 -(idx)*pitch) 후 C2_SCAN_POSE."""
-        if not self.use_camera:
-            self._publish_nocam_pick()  # manip 이 pick 직전 타깃을 갖도록 미리 공급
-        ty = self._bseq_pick_target_y_mm()
+        """너트 위치를 A/B로만 정렬한 뒤 C2_SCAN_POSE."""
+        ty, group, nut_pos = self._bseq_pick_target()
         cls = (self.pipe_nut_classes[self.bseq_index]
                if self.bseq_index < len(self.pipe_nut_classes) else '?')
-        st = self._goto_base(0.0, ty, f'C_BSEQ_PICK_MOVE#{self.bseq_index}')
+        st = self._goto_base(0.0, ty, f'C_BSEQ_PICK_MOVE#{self.bseq_index}({group})')
         if st == 'arrived':
             self.get_logger().info(
                 f'[C_BSEQ_PICK_MOVE] 파이프{self.bseq_index + 1} 너트={cls} '
-                f'슬롯{self._slot_of_current()} 정렬 완료 '
+                f'위치{nut_pos}->{group} 정렬 완료 '
                 f'(base x={self.base_x_mm:.0f} y={self.base_y_mm:.0f}mm) -> C2_SCAN_POSE')
             self._transition(State.C2_SCAN_POSE)
         elif st == 'failed':
@@ -859,18 +996,23 @@ class MissionC(Node):
             self._transition(State.RECOVERY)
 
     def _run_bseq_place_move(self) -> None:
-        """place A/B(측방+전진) 정렬 후 C3_INSERT. 이동 중 드롭 감시."""
+        """pipe3 기준 gap으로 정렬 후 insert target을 선택하고 C3_INSERT."""
         if self.last_attached_object == '':
             self.get_logger().warning(
                 '[C_BSEQ_PLACE_MOVE] 이동 중 파지 손실(드롭) -> RECOVERY (무차감)')
             self._transition(State.RECOVERY)
             return
-        tx, ty = self._bseq_place_target()
-        group = 'A' if self.bseq_index < self.place_split_count else 'B'
-        st = self._goto_base(tx, ty, f'C_BSEQ_PLACE_MOVE#{self.bseq_index}({group})')
+        tx, ty, pipe_no = self._bseq_place_target()
+        st = self._goto_base(tx, ty, f'C_BSEQ_PLACE_MOVE#{self.bseq_index}(pipe{pipe_no})')
         if st == 'arrived':
+            if not self._prepare_bseq_place_target(pipe_no):
+                if self._timed_out():
+                    self.get_logger().warning(
+                        f'[C_BSEQ_PLACE_MOVE] pipe{pipe_no} target 미수신 timeout -> RECOVERY')
+                    self._transition(State.RECOVERY)
+                return
             self.get_logger().info(
-                f'[C_BSEQ_PLACE_MOVE] place {group} 정렬 완료 '
+                f'[C_BSEQ_PLACE_MOVE] pipe{pipe_no} 정렬 완료 '
                 f'(base x={self.base_x_mm:.0f} y={self.base_y_mm:.0f}mm) -> C3_INSERT')
             self._transition(State.C3_INSERT)
         elif st == 'failed':
