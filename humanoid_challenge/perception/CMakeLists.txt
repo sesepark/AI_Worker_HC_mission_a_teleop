@@ -69,10 +69,92 @@ install(PROGRAMS
   RENAME place_pose_valid_node
 )
 
+install(PROGRAMS
+  perception_nodes/part_detector/generic_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME detector
+)
+install(PROGRAMS
+  perception_nodes/part_detector/green_button_color_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME green_button_color_detector_node
+)
+install(PROGRAMS
+  perception_nodes/part_detector/bolt_top_mock_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME bolt_top_mock_detector
+)
+install(PROGRAMS
+  perception_nodes/monitor_ocr_a/monitor_ocr_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME monitor_ocr_a_node
+)
+install(PROGRAMS
+  perception_nodes/monitor_ocr_a/viewer_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME monitor_ocr_a_viewer
+)
+install(PROGRAMS
+  perception_nodes/wrist_pipe/wrist_pipe_top_centers_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wrist_pipe_top_centers_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_targets/green_button_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME green_button_center_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_targets/bolt_top_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME bolt_top_center_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_targets/wheel_hole_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wheel_hole_center_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_targets/bolt_hole_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME bolt_hole_center_node
+)
+install(PROGRAMS
+  perception_nodes/wrist_targets/drill_endpoint_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME drill_endpoint_node
+)
+install(PROGRAMS
+  perception_nodes/zed_targets/green_button_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME zed_green_button_center_node
+)
+install(PROGRAMS
+  perception_nodes/zed_targets/bolt_top_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME zed_bolt_top_center_node
+)
+install(PROGRAMS
+  perception_nodes/zed_targets/wheel_hole_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME zed_wheel_hole_center_node
+)
+install(PROGRAMS
+  perception_nodes/zed_targets/bolt_hole_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME zed_bolt_hole_center_node
+)
+install(PROGRAMS
+  perception_nodes/zed_targets/drill_handle_center_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME zed_drill_handle_center_node
+)
+
 install(DIRECTORY
   launch
   config
   model
+  templates
   DESTINATION share/${PROJECT_NAME}
 )
 
