@@ -627,7 +627,8 @@ controller_interface::CallbackReturn JoystickController::on_configure(
   right_tact_press_start_time_ = rclcpp::Time(0);
 
   // Create publisher for cmd_vel
-  cmd_vel_pub_ = get_node()->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+  cmd_vel_pub_ = get_node()->create_publisher<geometry_msgs::msg::Twist>(
+    params_.cmd_vel_topic, 10);
 
   RCLCPP_INFO(get_node()->get_logger(), "JoystickController configured successfully.");
   return CallbackReturn::SUCCESS;

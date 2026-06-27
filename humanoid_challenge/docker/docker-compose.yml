@@ -1,6 +1,6 @@
 services:
   humanoid_challenge:
-    container_name: humanoid_challenge
+    container_name: humanoid_challenge_teleop_final
     image: ${HUMANOID_CHALLENGE_IMAGE:-shpark1104/humanoid_challenge:jazzy}
     tty: true
     stdin_open: true

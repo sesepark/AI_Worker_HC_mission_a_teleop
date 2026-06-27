@@ -1,0 +1,19 @@
+windows:
+  - name: rviz
+    enabled: true
+    title_patterns:
+      - "teleop_operator_rviz"
+      - "RViz"
+      - "RViz2"
+  - name: mission_control
+    enabled: false
+    title_patterns:
+      - "Mission Control"
+  - name: operator_image_viewer
+    enabled: true
+    title_patterns:
+      - "Teleop Image Viewer"
+  - name: operator_drive_panel
+    enabled: true
+    title_patterns:
+      - "Teleop Drive Control"

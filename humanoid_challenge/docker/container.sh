@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
-CONTAINER_NAME="humanoid_challenge"
+CONTAINER_NAME="humanoid_challenge_teleop_final"
 IMAGE_NAME="${HUMANOID_CHALLENGE_IMAGE:-shpark1104/humanoid_challenge:jazzy}"
 
 show_help() {

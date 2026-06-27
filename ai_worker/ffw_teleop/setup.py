@@ -1,3 +1,6 @@
+from glob import glob
+import os
+
 from setuptools import find_packages, setup
 
 package_name = 'ffw_teleop'
@@ -16,6 +19,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'docs'), glob('docs/*.md')),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,6 +37,17 @@ setup(
         'console_scripts': [
             'keyborad_control = ffw_teleop.keyboard_control:main',
             'mobile_teleop = ffw_teleop.mobile_teleop:main',
+            'wrist_depth_overlay = ffw_teleop.right_wrist_depth_overlay:main',
+            'right_wrist_depth_overlay = ffw_teleop.right_wrist_depth_overlay:main',
+            'zed_depth_assist = ffw_teleop.zed_depth_assist:main',
+            'teleop_alignment_status = ffw_teleop.alignment_status:main',
+            'teleop_bandwidth_monitor = ffw_teleop.teleop_bandwidth_monitor:main',
+            'teleop_cmd_vel_mux = ffw_teleop.teleop_cmd_vel_mux:main',
+            'teleop_head_trajectory_mux = ffw_teleop.teleop_head_trajectory_mux:main',
+            'mission_mode_manager = ffw_teleop.mission_mode_manager:main',
+            'operator_layout_manager = ffw_teleop.operator_layout_manager:main',
+            'operator_image_viewer = ffw_teleop.operator_image_viewer:main',
+            'operator_drive_panel = ffw_teleop.operator_drive_panel:main',
         ],
     },
 )

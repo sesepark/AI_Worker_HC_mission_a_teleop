@@ -1,0 +1,30 @@
+default_mission: A
+missions:
+  A:
+    title: "Mission A - Part Sorting"
+    summary: "Identify requested parts and place the selected parts into the tray."
+    specific_features:
+      - "Monitor command parser placeholder"
+      - "Part detection overlay placeholder"
+      - "Tray placement assist placeholder"
+  B:
+    title: "Mission B - Box Transport"
+    summary: "Grasp boxes, move to the target table, and place them at the marked area."
+    specific_features:
+      - "Dual-arm box grasp assist placeholder"
+      - "Stop line and target table assist placeholder"
+      - "Transport cycle counter placeholder"
+  C:
+    title: "Mission C - Sequential Assembly"
+    summary: "Follow the monitor order and insert the requested nuts onto the peg set."
+    specific_features:
+      - "Assembly order parser placeholder"
+      - "Peg diameter and position assist placeholder"
+      - "Completion button assist placeholder"
+  D:
+    title: "Mission D - Wheel Mounting"
+    summary: "Mount the wheel, insert the bolt, and complete tightening with the drill."
+    specific_features:
+      - "Wheel and hub alignment assist placeholder"
+      - "Bolt and drill grasp assist placeholder"
+      - "Fastening alignment assist placeholder"

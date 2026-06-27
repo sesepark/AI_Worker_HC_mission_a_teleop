@@ -2,7 +2,7 @@
 
 # Get the directory where the script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-CONTAINER_NAME="ai_worker"
+CONTAINER_NAME="ai_worker_teleop_final"
 GITHUB_RELEASES_API="https://api.github.com/repos/ROBOTIS-GIT/ai_worker/releases/latest"
 META_PACKAGE_XML="${SCRIPT_DIR}/../ffw/package.xml"
 
