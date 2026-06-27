@@ -1,0 +1,62 @@
+sg2_mission_b_system_nav:
+  ros__parameters:
+    system_action_topic: /mission_b/system/action
+    nav_event_topic: /mission_b/nav/event
+    system_nav_state_topic: /mission_b/system_nav/state
+    nav_state_topic: /mission_b/nav/state
+    failure_reason_topic: /mission_b/nav/failure_reason
+
+    cmd_vel_topic: /cmd_vel
+    use_sim_time: false
+
+    backward_distance: 0.70
+    right_distance: 3.80
+    forward_distance: 0.30
+    linear_speed: 0.12
+    lateral_speed: 0.20
+    forward_speed: 0.12
+
+    enable_lidar_alignment: true
+    desired_front_distance: 0.70
+
+    b_approach_forward_distance: 0.06
+    b_approach_speed: 0.12
+
+    return_mode: reverse_segments
+    enable_return_final_trim: true
+    return_final_trim_tolerance: 0.03
+    return_final_trim_max_distance: 0.35
+    enable_return_a_lidar_alignment: true
+    return_a_desired_front_distance: 0.30
+    return_a_align_timeout_sec: 30.0
+    return_a_pre_align_enabled: true
+    return_a_pre_align_backoff_distance: 0.45
+    return_a_skip_final_trim_when_lidar: true
+    return_a_alignment_mode: legs
+    return_a_fallback_to_front_band: true
+    return_a_leg_use_front_band: false
+    return_a_leg_cluster_gap: 0.14
+    return_a_leg_min_cluster_points: 1
+    return_a_leg_max_cluster_width_y: 0.22
+    return_a_leg_max_cluster_depth_x: 0.35
+    return_a_leg_min_spacing: 1.00
+    return_a_leg_expected_count: 3
+    return_a_leg_use_yaw: false
+    return_a_debug_markers: true
+    return_a_debug_marker_topic: /mission_b/debug/conveyor_legs
+    return_a_debug_marker_lifetime_sec: 0.8
+    return_a_use_front_band_alignment: true
+    return_a_front_band_width: 0.35
+    return_a_roi_x_min: 0.15
+    return_a_roi_x_max: 1.60
+    return_a_roi_y_abs: 2.00
+
+    pause_after_a_mark_sec: 1.0
+    pause_at_b_sec: 0.0
+    keep_alive_after_done_sec: 2.0
+    hold_heading_during_segments: true
+
+    min_command_speed: 0.12
+    min_align_vx: 0.12
+    min_center_vy: 0.12
+    min_yaw_wz: 0.12
