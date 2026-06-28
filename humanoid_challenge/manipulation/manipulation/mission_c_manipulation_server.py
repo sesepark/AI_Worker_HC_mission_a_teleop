@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Mission C manipulation 실 서버 — mission_a_manipulation_server 의 C(peg 삽입·양팔) 변형.
+"""Mission C manipulation 실 서버 — Mission C operational primitives 의 실행 서버.
 
-A 서버의 외부 계약·구조를 그대로 따르되, **이미 구현된 dual-arm primitive를 그대로 사용**해
-(1) 양팔 선택, (2) peg 타깃 삽입(hover→Cartesian 하강→gripper open)을 배선한다. 새 모션 로직 없음.
-  - dual-arm: MoveItClient(Arm.LEFT/RIGHT) + select_arm(y) + PickSkill/PlaceSkill(arm=...) — 기구현.
-  - 삽입 모션: PlaceSkill.place(..., local_mode='hover') = "hover 위 → Cartesian 하강 → open → retreat"
-    = peg 삽입. (기구현, A 도 동일 호출 — A 는 단일팔·고정 place 좌표로만 사용.)
+A 서버의 외부 계약·구조를 유지하되, Mission C 실운용 기준은 아래 세 primitive 로 둔다.
+  - test_pick_C.py: TwoStageCapture → build_c_grasp_pose → PickSkill → carry.
+  - test_place_C_manual.py: 고정 pipe3 좌표 기반 PlaceCSkill 삽입.
+  - test_place_C.py: perception pipe center 기반 PlaceCSkill 삽입.
 
 외부 계약(= mock/A 와 동일):
-  - action  `move_to_scan_pose` → 양팔 capture 자세(CAPTURE_JOINTS_R/L).
-  - sub `/attach_cmd`("pick") → PickSkill 픽(arm=select_arm(target.y), build_c_grasp_pose).
-  - sub `/detach_cmd`(class) → PlaceSkill 삽입(peg=insert_target, arm=pick arm, hover).
+  - action  `move_to_scan_pose` → test_pick_c 와 동일한 two-stage capture.
+  - sub `/attach_cmd`("pick") → test_pick_c 와 동일하게 정밀 좌표로 PickSkill 픽.
+  - sub `/detach_cmd`(class) → test_place_c_manual/test_place_c 와 동일하게 PlaceCSkill 삽입.
   - pub `/attached_object`(class/"") , `/manipulator_state`("IDLE"/"BUSY").
   - sub `/perception/task_list`, `/perception/wrist/target_one_pose`.
 C 신규 입력(FSM mission_c 가 통지):
@@ -53,16 +52,33 @@ from manipulation.robot_interface.planning_scene import (
 from manipulation.skill_primitives.grasp_assessment import GraspAssessment
 from manipulation.skill_primitives.grasp_skill import GraspSkill
 from manipulation.skill_primitives.pick_skill import PickSkill, PickResult
-from manipulation.skill_primitives.place_skill import PlaceSkill, PlaceResult
+from manipulation.skill_primitives.place_skill import PlaceCSkill, PlaceResult
 from manipulation.skill_primitives.planning_filter import PlanningFilter
 from manipulation.skill_primitives.mission_c_arm_selector import select_arm
 from manipulation.skill_primitives.mission_c_grasp_adapter import (
     build_c_grasp_pose, CARRY_Z)
+from manipulation.skill_primitives.two_stage_capture import TwoStageCapture
 
 
 # 양팔 capture 자세(test_base_C / test_capture_to_pick_C 와 동일값).
 CAPTURE_JOINTS_R = [-0.514537, -1.079939,  0.611448, -2.036518, -2.695534,  1.082374, -1.580207]
 CAPTURE_JOINTS_L = [-0.514537,  1.079939, -0.611448, -2.036518,  2.695534,  1.082374,  1.580207]
+
+# test_pick_c.py operational defaults.
+PICK_CAPTURE_Z = 1.050
+PICK_CAPTURE_SETTLE = 2.0
+PICK_PERCEPTION_TIMEOUT = 100.0
+
+# test_place_c_manual.py operational defaults.
+MANUAL_PIPE_X = 0.40
+MANUAL_PIPE_Y = -0.335
+MANUAL_PIPE_Z = 0.90
+MANUAL_PLACE_Y_OFFSET = 0.0
+MANUAL_GRIPPER_OPEN = 0.5
+
+# test_place_c.py operational defaults.
+CAMERA_PLACE_Y_OFFSET = -0.030
+CAMERA_GRIPPER_OPEN = 0.0
 
 
 class MissionCManipulationServer(Node):
@@ -93,6 +109,33 @@ class MissionCManipulationServer(Node):
         #   베이스 이동 시퀀스 검증용 — grasp/reach 문제와 분리해 FSM 을 끝까지 진행시킨다.
         self.pick_dry_run = bool(
             self.declare_parameter('pick_dry_run', False).value)
+        # test_pick_c operational primitive. 기본 ON.
+        self.two_stage_pick = bool(
+            self.declare_parameter('two_stage_pick', True).value)
+        self.pick_capture_z = float(
+            self.declare_parameter('pick_capture_z', PICK_CAPTURE_Z).value)
+        self.pick_capture_settle = float(
+            self.declare_parameter('pick_capture_settle', PICK_CAPTURE_SETTLE).value)
+        self.pick_perception_timeout = float(
+            self.declare_parameter('pick_perception_timeout', PICK_PERCEPTION_TIMEOUT).value)
+        # test_place_c_manual/test_place_c operational primitive selector.
+        # FSM 이 /mission_c/place_mode 를 보내면 그 값을 우선하고, 없으면 이 fallback 을 사용.
+        self.use_pipe_camera = bool(
+            self.declare_parameter('use_pipe_camera', False).value)
+        self.manual_pipe_x = float(
+            self.declare_parameter('manual_pipe_x', MANUAL_PIPE_X).value)
+        self.manual_pipe_y = float(
+            self.declare_parameter('manual_pipe_y', MANUAL_PIPE_Y).value)
+        self.manual_pipe_z = float(
+            self.declare_parameter('manual_pipe_z', MANUAL_PIPE_Z).value)
+        self.manual_place_y_offset = float(
+            self.declare_parameter('manual_place_y_offset', MANUAL_PLACE_Y_OFFSET).value)
+        self.manual_gripper_open = float(
+            self.declare_parameter('manual_gripper_open', MANUAL_GRIPPER_OPEN).value)
+        self.camera_place_y_offset = float(
+            self.declare_parameter('camera_place_y_offset', CAMERA_PLACE_Y_OFFSET).value)
+        self.camera_gripper_open = float(
+            self.declare_parameter('camera_gripper_open', CAMERA_GRIPPER_OPEN).value)
 
         # --- 외부 계약(A/mock 과 동일 이름·타입) ---
         self.pub_attached = self.create_publisher(String, '/attached_object', 10)
@@ -114,6 +157,9 @@ class MissionCManipulationServer(Node):
         self.sub_insert_arm = self.create_subscription(
             String, '/mission_c/insert_arm', self._on_insert_arm, 10,
             callback_group=self._cbg)
+        self.sub_place_mode = self.create_subscription(
+            String, '/mission_c/place_mode', self._on_place_mode, 10,
+            callback_group=self._cbg)
         self.srv_scan = ActionServer(
             self, MoveToScanPose, 'move_to_scan_pose', self._exec_scan,
             callback_group=self._cbg)
@@ -125,7 +171,7 @@ class MissionCManipulationServer(Node):
         self.grasp = GraspSkill(self, self.gripper, self.assess)
         self.pfilter = PlanningFilter(self.client, log=self.get_logger())
         self.pick = PickSkill(self, self.client, self.gripper, self.grasp, self.pfilter)
-        self.place = PlaceSkill(self, self.client, self.gripper, self.pfilter)
+        self.place_c = PlaceCSkill(self, self.client, self.gripper)
 
         # --- 상태 ---
         self._mirror = TaskList()
@@ -134,6 +180,7 @@ class MissionCManipulationServer(Node):
         self._latest_target: Pose | None = None
         self._latest_insert_target: Pose | None = None
         self._latest_insert_arm: str | None = None
+        self._latest_place_mode: str | None = None
         self._pending_attach = False
         self._busy = threading.Lock()
         self._ready = False
@@ -164,7 +211,8 @@ class MissionCManipulationServer(Node):
         self._ready = True
         self.get_logger().info(
             f'mission_c_manipulation_server ready (real MoveIt, arm_mode={self.arm_mode}, '
-            f'insert_dry_run={self.insert_dry_run})')
+            f'insert_dry_run={self.insert_dry_run}, two_stage_pick={self.two_stage_pick}, '
+            f'use_pipe_camera_fallback={self.use_pipe_camera})')
 
     def _resolve_arm(self, y: float) -> Arm:
         """arm_mode 에 따라 팔 결정: 'right'/'left' 고정, 'auto'=select_arm(y) 양팔."""
@@ -194,25 +242,57 @@ class MissionCManipulationServer(Node):
     def _on_insert_arm(self, msg: String) -> None:
         self._latest_insert_arm = msg.data
 
+    def _on_place_mode(self, msg: String) -> None:
+        mode = (msg.data or '').strip().lower()
+        if mode in ('manual', 'camera'):
+            self._latest_place_mode = mode
+        elif mode:
+            self.get_logger().warn(f'[manip-c] 알 수 없는 place_mode={mode!r} 무시')
+
     # --- C2_SCAN_POSE: capture 자세(사용 팔만; auto 면 양팔) ---
     def _exec_scan(self, goal_handle):
-        results = []
-        with self._busy:
-            if self.arm_mode in ('right', 'auto'):
-                results.append(('R', self.client.move_to_joints(
-                    CAPTURE_JOINTS_R, arm=Arm.RIGHT, velocity=0.2, acceleration=0.2)))
-            if self.arm_mode in ('left', 'auto'):
-                results.append(('L', self.client.move_to_joints(
-                    CAPTURE_JOINTS_L, arm=Arm.LEFT, velocity=0.2, acceleration=0.2)))
-        ok = all(r == MoveResult.SUCCEEDED for _, r in results)
+        scan_arm, capture_joints = self._scan_arm_and_joints()
+        if self.two_stage_pick:
+            with self._busy:
+                capture = TwoStageCapture(
+                    self, self.client,
+                    capture_joints=capture_joints,
+                    capture_z=self.pick_capture_z,
+                    settle=self.pick_capture_settle,
+                    perception_timeout=self.pick_perception_timeout,
+                    arm=scan_arm,
+                )
+                center = capture.run()
+            ok = center is not None
+            if ok:
+                self._latest_target = center
+                p = center.position
+                message = f'two-stage fine target ({p.x:.3f},{p.y:.3f},{p.z:.3f})'
+            else:
+                message = 'two-stage capture failed'
+        else:
+            with self._busy:
+                r = self.client.move_to_joints(
+                    capture_joints, arm=scan_arm, velocity=0.2, acceleration=0.2)
+            ok = (r == MoveResult.SUCCEEDED)
+            message = 'capture pose reached' if ok else f'move_to_joints={r}'
         goal_handle.succeed()
         result = MoveToScanPose.Result()
         result.success = ok
-        result.message = ('capture pose reached' if ok
-                          else ' '.join(f'{s}={r}' for s, r in results))
+        result.message = message
         self.get_logger().info(
-            f'[manip-c] move_to_scan_pose(arm_mode={self.arm_mode}) -> success={ok}')
+            f'[manip-c] move_to_scan_pose(arm={scan_arm.value}, two_stage={self.two_stage_pick}) '
+            f'-> success={ok} ({message})')
         return result
+
+    def _scan_arm_and_joints(self) -> tuple[Arm, list[float]]:
+        if self.arm_mode == 'left':
+            return Arm.LEFT, CAPTURE_JOINTS_L
+        if self.arm_mode == 'auto':
+            self.get_logger().warn(
+                '[manip-c] arm_mode=auto 에서는 two-stage capture 팔을 미리 알 수 없어 right 기준으로 스캔합니다.',
+                throttle_duration_sec=5.0)
+        return Arm.RIGHT, CAPTURE_JOINTS_R
 
     # --- C3_PICK: /attach_cmd → 픽(arm=select_arm(target.y)) ---
     def _on_attach(self, msg: String) -> None:
@@ -248,16 +328,17 @@ class MissionCManipulationServer(Node):
             res = self.pick.pick(grasp_pose, arm=arm, object_name=cls)
             if res == PickResult.SUCCESS:
                 self._current = cls
+                # test_pick_c.py 기준: grasp pose x/y에서 carry 상승 후 성공 래치 발행.
+                carry = Pose()
+                carry.position.x = grasp_pose.position.x
+                carry.position.y = grasp_pose.position.y
+                carry.position.z = CARRY_Z
+                carry.orientation.w = 1.0
+                carry_result = self.client.move_to_pose(carry, arm=arm, velocity=0.3, acceleration=0.3)
                 self.pub_attached.publish(String(data=cls))
                 self.get_logger().info(
-                    f'[manip-c] 파지 성공(arm={arm.value}) → /attached_object={cls}')
-                # carry 상승(x,y 유지 + CARRY_Z, grasp orientation 유지) — A 동일.
-                carry = Pose()
-                carry.position.x = center.position.x
-                carry.position.y = center.position.y
-                carry.position.z = CARRY_Z
-                carry.orientation = grasp_pose.orientation
-                self.client.move_to_pose(carry, arm=arm, velocity=0.3, acceleration=0.3)
+                    f'[manip-c] 파지 성공 + carry(z={CARRY_Z:.3f}, result={carry_result.value}) '
+                    f'→ /attached_object={cls}')
             else:
                 self.get_logger().warn(
                     f'[manip-c] 파지 실패({res}) — /attached_object 미발행(C2)')
@@ -296,39 +377,62 @@ class MissionCManipulationServer(Node):
                     f'미러 잔여 {self._mirror.total_remaining()}')
                 self._current = None
                 self._latest_insert_target = None
+                self._latest_insert_arm = None
+                self._latest_place_mode = None
                 self._emit_done_if_complete()
                 return
 
             # --- 실 경로(정밀 peg 삽입) ---
-            if self._latest_insert_target is None:
-                self.get_logger().warn(
-                    '[manip-c] /detach_cmd — insert_target 미수신 → 삽입 보류(FSM timeout→RECOVERY)')
-                return
             # 코디네이션 cross-check: FSM 이 통지한 insert_arm 과 pick arm 불일치 경고.
             if self._latest_insert_arm and self._latest_insert_arm != arm.value:
                 self.get_logger().warn(
                     f'[manip-c] insert_arm({self._latest_insert_arm}) != pick arm({arm.value}) '
                     f'— pick arm 으로 삽입(가동범위 확인 필요)')
-            peg = self._latest_insert_target
-            insert_pose = Pose()
-            insert_pose.position.x = peg.position.x
-            insert_pose.position.y = peg.position.y
-            insert_pose.position.z = peg.position.z
-            # top-down 삽입 자세(grasp 와 동일 규약).
-            insert_pose.orientation.w = 1.0
-            # 기구현 PlaceSkill hover: hover 위 → Cartesian 하강 → gripper open(삽입) → retreat.
-            res = self.place.place(insert_pose, arm=arm, local_mode='hover')
+            place_mode = self._resolve_place_mode()
+            pipe_pose = self._build_place_pose(place_mode)
+            if pipe_pose is None:
+                self.get_logger().warn(
+                    f'[manip-c] /detach_cmd — {place_mode} place target 미준비 '
+                    '→ 삽입 보류(FSM timeout→RECOVERY)')
+                return
+            gripper_open = (self.camera_gripper_open if place_mode == 'camera'
+                            else self.manual_gripper_open)
+            res = self.place_c.place(pipe_pose, arm=arm, gripper_open_amount=gripper_open)
             if res == PlaceResult.SUCCESS:
                 self.pub_attached.publish(String(data=''))
                 self._mirror.decrement(self._current)
                 self.get_logger().info(
-                    f'[manip-c] 삽입 완료(arm={arm.value}) → /attached_object="" ({self._current}), '
+                    f'[manip-c] 삽입 완료(mode={place_mode}, arm={arm.value}, '
+                    f'gripper_open={gripper_open}) → /attached_object="" ({self._current}), '
                     f'미러 잔여 {self._mirror.total_remaining()}')
                 self._current = None
                 self._latest_insert_target = None
+                self._latest_insert_arm = None
+                self._latest_place_mode = None
                 self._emit_done_if_complete()
             else:
                 self.get_logger().warn(f'[manip-c] 삽입 실패({res}) — 해제 미발행')
+
+    def _resolve_place_mode(self) -> str:
+        if self._latest_place_mode in ('manual', 'camera'):
+            return self._latest_place_mode
+        return 'camera' if self.use_pipe_camera else 'manual'
+
+    def _build_place_pose(self, mode: str) -> Pose | None:
+        pose = Pose()
+        pose.orientation.w = 1.0
+        if mode == 'camera':
+            target = self._latest_insert_target
+            if target is None:
+                return None
+            pose.position.x = target.position.x
+            pose.position.y = target.position.y + self.camera_place_y_offset
+            pose.position.z = target.position.z
+            return pose
+        pose.position.x = self.manual_pipe_x
+        pose.position.y = self.manual_pipe_y + self.manual_place_y_offset
+        pose.position.z = self.manual_pipe_z
+        return pose
 
 
 def main(args=None) -> None:

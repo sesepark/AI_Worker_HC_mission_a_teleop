@@ -69,8 +69,7 @@ MANUAL_PIPE3_X_M = 0.40
 MANUAL_PIPE3_Y_M = -0.335
 MANUAL_PIPE3_Z_M = 0.90
 
-# test_place_c.py applies a small rightward y offset to perception pipe centers.
-PIPE_CAMERA_PLACE_Y_OFFSET_M = -0.030
+# test_place_c.py y offset is applied by mission_c_manipulation_server.
 
 
 def select_arm(y: float) -> str:
@@ -321,6 +320,7 @@ class MissionC(Node):
         self.pub_insert_target = self.create_publisher(
             PoseStamped, '/mission_c/insert_target', 10)
         self.pub_insert_arm = self.create_publisher(String, '/mission_c/insert_arm', 10)
+        self.pub_place_mode = self.create_publisher(String, '/mission_c/place_mode', 10)
         # 미션 C 카메라 미사용 모드: pick 타깃 상수를 직접 발행(perception 우회).
         self.pub_wrist_target = self.create_publisher(
             PoseStamped, '/perception/wrist/target_one_pose', 10)
@@ -668,15 +668,18 @@ class MissionC(Node):
         ps.pose.orientation.w = 1.0
         self.pub_wrist_target.publish(ps)
 
-    def _publish_insert_target_pose(self, ps: PoseStamped, arm: str, label: str) -> None:
+    def _publish_insert_target_pose(
+        self, ps: PoseStamped, arm: str, label: str, mode: str
+    ) -> None:
         """Publish the selected pipe target to the Mission C manipulation server."""
         self.current_insert_pose = ps
         self.current_insert_arm = arm
+        self.pub_place_mode.publish(String(data=mode))
         self.pub_insert_target.publish(ps)
         self.pub_insert_arm.publish(String(data=arm))
         p = ps.pose.position
         self.get_logger().info(
-            f'[{label}] insert target -> arm={arm} '
+            f'[{label}] insert target -> mode={mode} arm={arm} '
             f'pos=({p.x:.3f},{p.y:+.3f},{p.z:.3f})')
 
     def _build_pipe_nut_classes(self) -> None:
@@ -750,11 +753,11 @@ class MissionC(Node):
         ps.pose.position.z = MANUAL_PIPE3_Z_M
         ps.pose.orientation.w = 1.0
         arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(MANUAL_PIPE3_Y_M)
-        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} manual')
+        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} manual', 'manual')
         return True
 
     def _set_camera_pipe_place(self, pipe_no: int) -> bool:
-        """perception pipe center를 선택해 test_place_c.py 방식으로 target을 발행."""
+        """perception pipe center raw target을 발행. y-offset은 manip 서버가 적용한다."""
         centers = self.last_pipe_centers
         idx = pipe_no - 1
         if centers is None or idx < 0 or idx >= len(centers.poses):
@@ -767,11 +770,11 @@ class MissionC(Node):
         ps.header.frame_id = centers.header.frame_id or 'base_link'
         ps.header.stamp = self.get_clock().now().to_msg()
         ps.pose.position.x = pose.position.x
-        ps.pose.position.y = pose.position.y + PIPE_CAMERA_PLACE_Y_OFFSET_M
+        ps.pose.position.y = pose.position.y
         ps.pose.position.z = pose.position.z
         ps.pose.orientation = pose.orientation
         arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(ps.pose.position.y)
-        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} camera')
+        self._publish_insert_target_pose(ps, arm, f'C_BSEQ_PLACE_MOVE pipe{pipe_no} camera', 'camera')
         return True
 
     def _prepare_bseq_place_target(self, pipe_no: int) -> bool:
@@ -794,6 +797,7 @@ class MissionC(Node):
         arm = self.arm_mode if self.arm_mode in ('right', 'left') else select_arm(pose.position.y)
         self.current_insert_pose = ps
         self.current_insert_arm = arm
+        self.pub_place_mode.publish(String(data='camera'))
         self.pub_insert_target.publish(ps)
         self.pub_insert_arm.publish(String(data=arm))
         self.get_logger().info(
