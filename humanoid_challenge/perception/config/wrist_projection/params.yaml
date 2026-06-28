@@ -37,7 +37,7 @@ wrist_task_grasp_planner_node:
     # Task gating.
     allow_all_without_task: false
     require_screen_detected: false
-    task_timeout_sec: 10.0
+    task_timeout_sec: 0.0
 
     # 고정 픽 순서(class 우선순위). 비우면 [] → 기존 점수기반 선택.
     # ※ 통합 브랜치 기본값은 [](=미션 A 점수기반). pick_class_order는 미션 C 전용 기능이며,
@@ -63,13 +63,13 @@ wrist_task_grasp_planner_node:
 
     # Scoring.
     min_score_to_publish: 0.20
-    # If arm_reference_frame is empty, arm_reference_xyz is interpreted in base_frame.
-    # If arm_reference_frame is set, arm_reference_xyz is interpreted in that frame.
-    arm_reference_frame: ""
+    # arm_proximity = "손목 카메라 바로 밑(광축 직선 밑)" 선호 (mission-a 87bcf99).
+    # perception_live 는 arm_reference_frame 을 camera_right_link 로 override → 거기선 그 프레임 사용.
+    arm_reference_frame: "camera_right_color_optical_frame"
     arm_reference_xyz: [0.0, 0.0, 0.0]
     max_arm_distance_m: 0.60
-    weight_confidence: 0.45
-    weight_arm_proximity: 0.55
+    weight_confidence: 0.40    # 신뢰도보다
+    weight_arm_proximity: 0.60 # '직선 밑' 근접도를 더 크게 → 밑에 있는 부품 우선
 
     # Synchronization, logging, temporal smoothing, and republish.
     sync_slop: 0.10
@@ -77,9 +77,11 @@ wrist_task_grasp_planner_node:
     log_rankings: true
     log_top_k: 5
     temporal_smoothing_enable: true
-    temporal_window_sec: 0.8
-    temporal_min_observations: 2
-    temporal_position_gate_m: 0.06
+    temporal_window_sec: 1.0
+    temporal_min_observations: 1     # mission-a 87bcf99: 2히트 대기 제거 → 첫 유효 후보 즉시 select
+    temporal_position_gate_m: 0.10   # 0.06→0.10: 팔 이동/깊이 jitter 에도 같은 타깃 같은 cluster
     temporal_max_history: 50
+    select_lock_enable: true
+    select_switch_margin: 0.10       # mission-a 87bcf99: lock 끈적 → 2차 scan 이 1차 타깃 유지
     republish_last_pose_hz: 2.0
     hold_last_pose_sec: 2.0

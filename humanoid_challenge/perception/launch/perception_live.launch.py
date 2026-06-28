@@ -45,9 +45,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('yolo_python', default_value='/ws/yolo_venv/bin/python3'),
         # wrist planner (§4.3 기본값 노출)
         DeclareLaunchArgument('arm_reference_frame', default_value='camera_right_link'),
-        DeclareLaunchArgument('temporal_window_sec', default_value='12.0'),
-        DeclareLaunchArgument('temporal_min_observations', default_value='2'),
-        DeclareLaunchArgument('temporal_position_gate_m', default_value='0.08'),
+        # mission-a 87bcf99 wrist-select 정합: 즉시 select(min_obs=1) + jitter 허용 gate(0.10)
+        #   + 짧은 window(1.0s). 2회 안정 게이트가 지터/저속검출로 안 차던 문제 해결.
+        DeclareLaunchArgument('temporal_window_sec', default_value='1.0'),
+        DeclareLaunchArgument('temporal_min_observations', default_value='1'),
+        DeclareLaunchArgument('temporal_position_gate_m', default_value='0.10'),
         # static TF (camera_r_link → camera_right_link). 실 bringup 이 이미 게시하면 publish_camera_tf:=false
         DeclareLaunchArgument('publish_camera_tf', default_value='true'),
         # C3 place_pose_valid 주입(검증용)

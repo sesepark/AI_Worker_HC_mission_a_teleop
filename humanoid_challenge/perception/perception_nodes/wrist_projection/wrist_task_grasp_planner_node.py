@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from rcl_interfaces.msg import ParameterDescriptor
 
 import message_filters
@@ -387,11 +387,17 @@ class WristTaskGraspPlannerNode(Node):
         )
         self.sync.registerCallback(self.synced_cb)
 
+        # task_list 는 latched(TRANSIENT_LOCAL) 생산자와 QoS 일치 — 늦은 구독자도 마지막 값 수신
+        # (mission-a 8f03fb2 'Selector 통신 오류 해결' 동일 적용).
         self.sub_task = self.create_subscription(
             GetTaskList.Response,
             self.task_topic,
             self.task_cb,
-            10,
+            QoSProfile(
+                depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST,
+            ),
         )
         self.sub_det = self.create_subscription(
             PartDetectionArray, self.detections_topic, self.detections_cb, 10)

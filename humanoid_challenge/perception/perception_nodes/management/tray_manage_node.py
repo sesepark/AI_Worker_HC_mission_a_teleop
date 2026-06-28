@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from mission_interfaces.msg import TaskItem
 from mission_interfaces.srv import GetTaskList
 from sensor_msgs.msg import Image, RegionOfInterest
@@ -150,10 +150,17 @@ class TrayManageNode(Node):
                 "and /perception/tray_roi updates."
             )
 
+        # task_list 는 latched(TRANSIENT_LOCAL) 로 발행 — 늦게 뜬 구독자(wrist/manip/FSM)도
+        # 마지막 값 수신, VOLATILE 구독자와도 호환 (mission-a 8f03fb2 동일 적용).
+        _task_qos = QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+        )
         self.pub_task = self.create_publisher(
             GetTaskList.Response,
             self.task_list_topic,
-            10,
+            _task_qos,
         )
         self.pub_tray_roi = self.create_publisher(RegionOfInterest, self.tray_roi_topic, 10)
         self.pub_tray_mask_debug = self.create_publisher(
