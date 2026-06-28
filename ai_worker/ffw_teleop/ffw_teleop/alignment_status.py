@@ -3,6 +3,7 @@ import math
 import os
 
 import cv2
+from control_msgs.msg import DynamicJointState
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -16,6 +17,18 @@ from std_msgs.msg import Bool
 from std_msgs.msg import Float32
 from std_msgs.msg import String
 from trajectory_msgs.msg import JointTrajectory
+
+
+DXL_CURRENT_JOINTS = [
+    ('right', 'J1', 'dxl1'),
+    ('right', 'J2', 'dxl2'),
+    ('right', 'J3', 'dxl3'),
+    ('left', 'J1', 'dxl31'),
+    ('left', 'J2', 'dxl32'),
+    ('left', 'J3', 'dxl33'),
+]
+DXL_CURRENT_NAMES = {name for _, _, name in DXL_CURRENT_JOINTS}
+DXL_CURRENT_INTERFACE = 'Present Current'
 
 
 class AlignmentStatus(Node):
@@ -61,6 +74,12 @@ class AlignmentStatus(Node):
         self.declare_parameter('status_panel_width', 1280)
         self.declare_parameter('status_panel_height', 720)
         self.declare_parameter('status_panel_jpeg_quality', 95)
+        self.declare_parameter('dxl_current_topic', '/dynamic_joint_states')
+        self.declare_parameter('dxl_current_calibration_s', 3.0)
+        self.declare_parameter('dxl_current_baseline_floor', 50.0)
+        self.declare_parameter('dxl_current_caution_ratio', 1.6)
+        self.declare_parameter('dxl_current_warn_ratio', 2.2)
+        self.declare_parameter('dxl_current_stale_timeout_s', 1.0)
 
         self.pos_threshold_m = float(self.get_parameter('pos_threshold_m').value)
         self.ori_threshold_deg = float(self.get_parameter('ori_threshold_deg').value)
@@ -80,6 +99,18 @@ class AlignmentStatus(Node):
         self.status_panel_height = max(int(self.get_parameter('status_panel_height').value), 180)
         self.status_panel_jpeg_quality = int(min(
             max(int(self.get_parameter('status_panel_jpeg_quality').value), 1), 100))
+        self.dxl_current_topic = str(self.get_parameter('dxl_current_topic').value).strip()
+        self.dxl_current_calibration_s = max(
+            float(self.get_parameter('dxl_current_calibration_s').value), 0.0)
+        self.dxl_current_baseline_floor = max(
+            float(self.get_parameter('dxl_current_baseline_floor').value), 1.0)
+        self.dxl_current_caution_ratio = max(
+            float(self.get_parameter('dxl_current_caution_ratio').value), 1.0)
+        self.dxl_current_warn_ratio = max(
+            float(self.get_parameter('dxl_current_warn_ratio').value),
+            self.dxl_current_caution_ratio)
+        self.dxl_current_stale_timeout_s = max(
+            float(self.get_parameter('dxl_current_stale_timeout_s').value), 0.2)
 
         self.latest = {}
         self.latest_alignment_status = None
@@ -90,6 +121,11 @@ class AlignmentStatus(Node):
         self.latest_mode = 'arm_control'
         self.latest_center_distance = {}
         self.latest_depth_metrics = {}
+        self.latest_dxl_current = {}
+        self.latest_dxl_current_time = None
+        self.dxl_current_calibration_start = None
+        self.dxl_current_baseline = {}
+        self.dxl_current_samples = {name: [] for name in DXL_CURRENT_NAMES}
         self.last_event_warn_time = None
         self._subscribe_pose('right_goal', self.get_parameter('right_goal_topic').value)
         self._subscribe_pose('left_goal', self.get_parameter('left_goal_topic').value)
@@ -143,6 +179,9 @@ class AlignmentStatus(Node):
         self._subscribe_if_topic(
             String, self.get_parameter('left_depth_metrics_topic').value,
             lambda msg: self._depth_metrics_callback('left', msg))
+        self._subscribe_if_topic(
+            DynamicJointState, self.dxl_current_topic,
+            self._dxl_current_callback, qos_profile_sensor_data)
 
         if not self.record_practice_events:
             return
@@ -223,6 +262,50 @@ class AlignmentStatus(Node):
         except json.JSONDecodeError:
             self._warn_event_throttled(f'failed to parse {side} depth metrics')
 
+    def _dxl_current_callback(self, msg):
+        now = self.get_clock().now()
+        if self.dxl_current_calibration_start is None:
+            self.dxl_current_calibration_start = now
+
+        latest = {}
+        for index, joint_name in enumerate(msg.joint_names):
+            if joint_name not in DXL_CURRENT_NAMES or index >= len(msg.interface_values):
+                continue
+            interface_values = msg.interface_values[index]
+            entry = {
+                'current_raw': None,
+                'error_code': None,
+                'hardware_error_status': None,
+            }
+            for interface_name, value in zip(
+                interface_values.interface_names,
+                interface_values.values
+            ):
+                cleaned_value = self._safe_float(value)
+                if cleaned_value is None:
+                    continue
+                if interface_name == DXL_CURRENT_INTERFACE:
+                    entry['current_raw'] = cleaned_value
+                elif interface_name == 'Error Code':
+                    entry['error_code'] = cleaned_value
+                elif interface_name == 'Hardware Error Status':
+                    entry['hardware_error_status'] = cleaned_value
+            latest[joint_name] = entry
+
+        if not latest:
+            return
+
+        self.latest_dxl_current = latest
+        self.latest_dxl_current_time = now
+
+        if self._dxl_current_calibrating(now):
+            for joint_name, entry in latest.items():
+                current = entry.get('current_raw')
+                if current is not None:
+                    self.dxl_current_samples[joint_name].append(abs(float(current)))
+        elif len(self.dxl_current_baseline) < len(DXL_CURRENT_NAMES):
+            self._finalize_dxl_current_baseline()
+
     def _publish_status(self):
         right = self._arm_status('right')
         left = self._arm_status('left')
@@ -242,6 +325,7 @@ class AlignmentStatus(Node):
             'depth_metrics': self._depth_metrics_snapshot(),
             'head': self._head_snapshot(),
             'table_relative': self._table_relative_snapshot(),
+            'dxl_current': self._dxl_current_snapshot(),
         }
         self.latest_alignment_status = payload
 
@@ -269,6 +353,7 @@ class AlignmentStatus(Node):
             'depth_metrics': self._depth_metrics_snapshot(),
             'head': self._head_snapshot(),
             'table_relative': self._table_relative_snapshot(),
+            'dxl_current': self._dxl_current_snapshot(),
             'alignment': self.latest_alignment_status,
         }
         data = json.dumps(payload, sort_keys=True)
@@ -382,6 +467,9 @@ class AlignmentStatus(Node):
         self._put_panel_text(
             image, table_text, p(16, 220), 0.48 * scale, (203, 211, 218), line(1))
 
+        self._draw_dxl_current_panel(
+            image, payload.get('dxl_current'), p, line, scale)
+
         ok, encoded = cv2.imencode(
             '.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), self.status_panel_jpeg_quality])
         if not ok:
@@ -401,6 +489,72 @@ class AlignmentStatus(Node):
         cv2.putText(
             image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
             color, thickness, cv2.LINE_AA)
+
+    def _draw_dxl_current_panel(self, image, snapshot, p, line, scale):
+        base_color = (236, 241, 245)
+        muted_color = (203, 211, 218)
+        state = (snapshot or {}).get('state', 'no_data')
+        title = 'DXL LOAD'
+        if state == 'calibrating':
+            elapsed = float((snapshot or {}).get('calibration_elapsed_s') or 0.0)
+            total = max(self.dxl_current_calibration_s, 0.1)
+            text = f'{title}: CALIBRATING {elapsed:.1f}/{total:.1f}s'
+            self._put_panel_text(image, text, p(16, 256), 0.48 * scale, muted_color, line(1))
+            return
+        if state == 'no_data':
+            self._put_panel_text(
+                image, f'{title}: NO DATA', p(16, 256),
+                0.48 * scale, muted_color, line(1))
+            return
+        if state == 'stale':
+            stale_age = (snapshot or {}).get('stale_age_s')
+            suffix = f' {float(stale_age):.1f}s' if stale_age is not None else ''
+            self._put_panel_text(
+                image, f'{title}: STALE{suffix}', p(16, 256),
+                0.48 * scale, (0, 165, 255), line(1))
+            return
+
+        self._put_panel_text(
+            image, f'{title} raw', p(16, 256),
+            0.48 * scale, base_color, line(1))
+        self._draw_dxl_current_row(image, snapshot, 'right', p(16, 290), p, line, scale)
+        self._draw_dxl_current_row(image, snapshot, 'left', p(16, 324), p, line, scale)
+
+    def _draw_dxl_current_row(self, image, snapshot, side, origin, p, line, scale):
+        side_label = 'R' if side == 'right' else 'L'
+        self._put_panel_text(
+            image, f'{side_label}:', origin, 0.45 * scale,
+            (236, 241, 245), line(1))
+        x_base = 54
+        joints = (snapshot or {}).get('joints') or {}
+        for index, (_, joint_label, joint_name) in enumerate(
+            [item for item in DXL_CURRENT_JOINTS if item[0] == side]
+        ):
+            entry = joints.get(joint_name) or {}
+            text = self._format_dxl_current_entry(joint_label, entry)
+            color = self._dxl_level_color(entry.get('level'))
+            x = x_base + index * 190
+            self._put_panel_text(
+                image, text, p(x, origin[1] / scale),
+                0.43 * scale, color, line(1))
+            self._draw_dxl_current_bar(
+                image, entry, p(x, origin[1] / scale + 10), scale)
+
+    def _draw_dxl_current_bar(self, image, entry, origin, scale):
+        width = int(round(128 * scale))
+        height = max(int(round(7 * scale)), 2)
+        x, y = origin
+        cv2.rectangle(image, (x, y), (x + width, y + height), (72, 76, 82), -1)
+        ratio = entry.get('load_ratio')
+        if ratio is None:
+            return
+        fill_ratio = min(max(float(ratio) / max(self.dxl_current_warn_ratio, 0.1), 0.0), 1.0)
+        fill_width = int(round(width * fill_ratio))
+        if fill_width <= 0:
+            return
+        cv2.rectangle(
+            image, (x, y), (x + fill_width, y + height),
+            self._dxl_level_color(entry.get('level')), -1)
 
     def _format_distance(self, value):
         if value is None:
@@ -439,6 +593,34 @@ class AlignmentStatus(Node):
         if value is None:
             return '--'
         return f'{float(value):+.2f}'
+
+    def _format_dxl_current_entry(self, joint_label, entry):
+        current = self._format_dxl_current_value(entry.get('current_raw'))
+        if entry.get('fault'):
+            return f'{joint_label} FAULT/{current}'
+        ratio = entry.get('load_ratio')
+        if ratio is None:
+            return f'{joint_label} --/{current}'
+        return f'{joint_label} {float(ratio):.1f}x/{current}'
+
+    def _format_dxl_current_value(self, value):
+        if value is None:
+            return '--'
+        value = float(value)
+        if abs(value - round(value)) < 0.05:
+            return str(int(round(value)))
+        return f'{value:.1f}'
+
+    def _dxl_level_color(self, level):
+        if level == 'fault':
+            return (36, 36, 255)
+        if level == 'red':
+            return (48, 64, 255)
+        if level == 'orange':
+            return (0, 165, 255)
+        if level == 'green':
+            return (84, 214, 127)
+        return (203, 211, 218)
 
     def _format_arm_status(self, status):
         if not status.get('available'):
@@ -541,6 +723,126 @@ class AlignmentStatus(Node):
             return None
         return self.latest_depth_metrics.copy()
 
+    def _dxl_current_snapshot(self):
+        if self.latest_dxl_current_time is None:
+            return {
+                'state': 'no_data',
+                'topic': self.dxl_current_topic,
+            }
+
+        now = self.get_clock().now()
+        age_s = (now - self.latest_dxl_current_time).nanoseconds / 1e9
+        if age_s > self.dxl_current_stale_timeout_s:
+            return {
+                'state': 'stale',
+                'topic': self.dxl_current_topic,
+                'stale_age_s': self._clean_float(age_s),
+            }
+
+        if self._dxl_current_calibrating(now):
+            elapsed_s = 0.0
+            if self.dxl_current_calibration_start is not None:
+                elapsed_s = (now - self.dxl_current_calibration_start).nanoseconds / 1e9
+            return {
+                'state': 'calibrating',
+                'topic': self.dxl_current_topic,
+                'calibration_elapsed_s': self._clean_float(elapsed_s),
+                'calibration_target_s': self._clean_float(self.dxl_current_calibration_s),
+            }
+
+        if len(self.dxl_current_baseline) < len(DXL_CURRENT_NAMES):
+            self._finalize_dxl_current_baseline()
+
+        joints = {}
+        worst_level = 'green'
+        for side, label, joint_name in DXL_CURRENT_JOINTS:
+            entry = self.latest_dxl_current.get(joint_name, {})
+            current = entry.get('current_raw')
+            error_code = self._nonzero_or_none(entry.get('error_code'))
+            hardware_status = self._nonzero_or_none(entry.get('hardware_error_status'))
+            fault = bool(error_code is not None or hardware_status is not None)
+            baseline = max(
+                float(self.dxl_current_baseline.get(joint_name, self.dxl_current_baseline_floor)),
+                self.dxl_current_baseline_floor)
+            ratio = None if current is None else abs(float(current)) / baseline
+            level = self._dxl_current_level(ratio, fault)
+            worst_level = self._max_dxl_level(worst_level, level)
+            joints[joint_name] = {
+                'side': side,
+                'label': label,
+                'current_raw': self._clean_float(current) if current is not None else None,
+                'baseline_raw': self._clean_float(baseline),
+                'load_ratio': self._clean_float(ratio) if ratio is not None else None,
+                'level': level,
+                'fault': fault,
+                'error_code': error_code,
+                'hardware_error_status': hardware_status,
+            }
+        return {
+            'state': 'ok',
+            'topic': self.dxl_current_topic,
+            'age_s': self._clean_float(age_s),
+            'baseline_floor': self._clean_float(self.dxl_current_baseline_floor),
+            'caution_ratio': self._clean_float(self.dxl_current_caution_ratio),
+            'warn_ratio': self._clean_float(self.dxl_current_warn_ratio),
+            'worst_level': worst_level,
+            'joints': joints,
+        }
+
+    def _dxl_current_calibrating(self, now):
+        if self.dxl_current_calibration_start is None:
+            return False
+        elapsed_s = (now - self.dxl_current_calibration_start).nanoseconds / 1e9
+        return elapsed_s < self.dxl_current_calibration_s
+
+    def _finalize_dxl_current_baseline(self):
+        for joint_name in DXL_CURRENT_NAMES:
+            samples = self.dxl_current_samples.get(joint_name) or []
+            if samples:
+                ordered = sorted(samples)
+                middle = len(ordered) // 2
+                if len(ordered) % 2:
+                    baseline = ordered[middle]
+                else:
+                    baseline = 0.5 * (ordered[middle - 1] + ordered[middle])
+            else:
+                latest = self.latest_dxl_current.get(joint_name, {})
+                current = latest.get('current_raw')
+                baseline = (
+                    abs(float(current))
+                    if current is not None
+                    else self.dxl_current_baseline_floor
+                )
+            self.dxl_current_baseline[joint_name] = max(
+                float(baseline), self.dxl_current_baseline_floor)
+
+    def _dxl_current_level(self, ratio, fault):
+        if fault:
+            return 'fault'
+        if ratio is None:
+            return 'unknown'
+        if ratio >= self.dxl_current_warn_ratio:
+            return 'red'
+        if ratio >= self.dxl_current_caution_ratio:
+            return 'orange'
+        return 'green'
+
+    def _max_dxl_level(self, current, candidate):
+        priority = {
+            'unknown': 0,
+            'green': 1,
+            'orange': 2,
+            'red': 3,
+            'fault': 4,
+        }
+        return candidate if priority.get(candidate, 0) > priority.get(current, 0) else current
+
+    def _nonzero_or_none(self, value):
+        if value is None:
+            return None
+        value = int(round(float(value)))
+        return value if value != 0 else None
+
     def _table_relative_snapshot(self):
         msg = self.latest_odom
         if not self.table_reference_enabled or msg is None:
@@ -575,6 +877,12 @@ class AlignmentStatus(Node):
         if not math.isfinite(value):
             return None
         return value
+
+    def _safe_float(self, value):
+        try:
+            return self._clean_float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _yaw_from_quaternion(self, quat):
         siny_cosp = 2.0 * (quat.w * quat.z + quat.x * quat.y)

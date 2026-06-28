@@ -12,6 +12,7 @@
   <author email="ywh@robotis.com">Wonho Yun</author>
   <author email="wwj@robotis.com">Woojin Wie</author>
 
+  <depend>control_msgs</depend>
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>

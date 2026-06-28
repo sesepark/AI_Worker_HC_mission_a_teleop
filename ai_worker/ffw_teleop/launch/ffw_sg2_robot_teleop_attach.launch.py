@@ -18,6 +18,12 @@ def generate_launch_description():
     start_right_wrist_depth_assist = LaunchConfiguration('start_right_wrist_depth_assist')
     start_alignment_monitor = LaunchConfiguration('start_alignment_monitor')
     start_bandwidth_monitor = LaunchConfiguration('start_bandwidth_monitor')
+    dxl_current_topic = LaunchConfiguration('dxl_current_topic')
+    dxl_current_calibration_s = LaunchConfiguration('dxl_current_calibration_s')
+    dxl_current_baseline_floor = LaunchConfiguration('dxl_current_baseline_floor')
+    dxl_current_caution_ratio = LaunchConfiguration('dxl_current_caution_ratio')
+    dxl_current_warn_ratio = LaunchConfiguration('dxl_current_warn_ratio')
+    dxl_current_stale_timeout_s = LaunchConfiguration('dxl_current_stale_timeout_s')
 
     zed_depth_assist = Node(
         package='ffw_teleop',
@@ -126,6 +132,12 @@ def generate_launch_description():
             'right_depth_metrics_topic': LaunchConfiguration('right_wrist_metrics_topic'),
             'status_panel_topic': LaunchConfiguration('status_panel_topic'),
             'status_panel_jpeg_quality': LaunchConfiguration('status_panel_jpeg_quality'),
+            'dxl_current_topic': dxl_current_topic,
+            'dxl_current_calibration_s': dxl_current_calibration_s,
+            'dxl_current_baseline_floor': dxl_current_baseline_floor,
+            'dxl_current_caution_ratio': dxl_current_caution_ratio,
+            'dxl_current_warn_ratio': dxl_current_warn_ratio,
+            'dxl_current_stale_timeout_s': dxl_current_stale_timeout_s,
             'record_practice_events': 'false',
         }],
     )
@@ -210,6 +222,12 @@ def generate_launch_description():
         DeclareLaunchArgument('cmd_vel_topic', default_value='/cmd_vel'),
         DeclareLaunchArgument('status_panel_topic', default_value='/teleop/operator_status/compressed'),
         DeclareLaunchArgument('status_panel_jpeg_quality', default_value='95'),
+        DeclareLaunchArgument('dxl_current_topic', default_value='/dynamic_joint_states'),
+        DeclareLaunchArgument('dxl_current_calibration_s', default_value='3.0'),
+        DeclareLaunchArgument('dxl_current_baseline_floor', default_value='50.0'),
+        DeclareLaunchArgument('dxl_current_caution_ratio', default_value='1.6'),
+        DeclareLaunchArgument('dxl_current_warn_ratio', default_value='2.2'),
+        DeclareLaunchArgument('dxl_current_stale_timeout_s', default_value='1.0'),
         DeclareLaunchArgument('bandwidth_monitor_topic', default_value='/teleop/bandwidth_monitor'),
         DeclareLaunchArgument('bandwidth_panel_topic', default_value='/teleop/bandwidth_monitor/compressed'),
         DeclareLaunchArgument('bandwidth_available_mbps', default_value='350.0'),
